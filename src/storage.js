@@ -2,7 +2,7 @@ import { gallonsToLiters } from './units.js';
 
 export const LEGACY_KEY = 'wcStaticV1';
 export const STORAGE_KEY = 'wcStaticV2';
-export const VERSION = 3;
+export const VERSION = 4;
 
 export const newId = () => crypto.randomUUID();
 
@@ -83,6 +83,23 @@ function convertVolumes(state) {
   return result;
 }
 
+function convertForms(state, defaults) {
+  if (!object(state?.adds) || !object(state.enabled) || !object(state.drawer)) return state;
+  for (const key of ['adds', 'enabled', 'drawer']) {
+    const entries = state[key];
+    if (Object.hasOwn(entries, 'cacl2')) {
+      entries['cacl2-dihydrate'] = entries.cacl2;
+      delete entries.cacl2;
+    }
+    if (!Object.hasOwn(entries, 'cacl2-anhydrous')) {
+      entries['cacl2-anhydrous'] = key === 'drawer'
+        ? { ...defaults.drawer['cacl2-anhydrous'], owned: false, unlimited: false }
+        : defaults[key]['cacl2-anhydrous'];
+    }
+  }
+  return state;
+}
+
 export function migrateLegacy(record, defaults) {
   if (!object(record)) throw new Error('The prototype save is invalid.');
   record = convertVolumes(record);
@@ -105,7 +122,7 @@ export function migrateLegacy(record, defaults) {
     state.targetPreset = entry ? 'custom:' + entry.id : '__customised';
   }
   if (record.drawer?.kmeta) state.drawer.kmeta.stock *= 1000;
-  return validate(state, defaults);
+  return validate(convertForms(state, defaults), defaults);
 }
 
 export function encodeBackup(state) {
@@ -114,8 +131,10 @@ export function encodeBackup(state) {
 
 export function decodeBackup(raw, defaults) {
   const record = JSON.parse(raw);
-  if (!object(record) || ![2, VERSION].includes(record.version)) throw new Error('This backup version is unsupported.');
-  return validate(record.version === 2 ? convertVolumes(record.data) : record.data, defaults);
+  if (!object(record) || ![2, 3, VERSION].includes(record.version)) throw new Error('This backup version is unsupported.');
+  if (record.version === VERSION) return validate(record.data, defaults);
+  const state = record.version === 2 ? convertVolumes(record.data) : record.data;
+  return validate(convertForms(state, defaults), defaults);
 }
 
 export function writeSave(getStorage, state) {

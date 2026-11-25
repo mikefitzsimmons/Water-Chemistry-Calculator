@@ -1,4 +1,4 @@
-import { GAL } from './units.js';
+import { mmolPerUnit } from './catalog.js';
 
 export function effectiveDose(state, id) {
   return state.enabled[id] ? state.adds[id] ?? 0 : 0;
@@ -22,9 +22,13 @@ export function evaluate(state, ingredients, keys) {
   }));
   for (const ingredient of ingredients) {
     const dose = effectiveDose(state, ingredient.id);
-    if (!dose || !ingredient.per) continue;
-    for (const [key, perGallon] of Object.entries(ingredient.per)) {
-      if (profile[key] != null) profile[key] += dissolvedContribution(dose, perGallon * GAL, batchL);
+    if (!dose || !ingredient.mass) continue;
+    for (const [key, mg] of Object.entries(ingredient.mass)) {
+      if (profile[key] != null) profile[key] += dissolvedContribution(dose, mg, batchL);
+    }
+    if (profile.HCO3 != null && (ingredient.base || ingredient.pKs)) {
+      const equivalents = ingredient.base ?? -1;
+      profile.HCO3 += dose * mmolPerUnit(ingredient) * equivalents * 61 / batchL;
     }
   }
   if (profile.HCO3 < 0) profile.HCO3 = 0;

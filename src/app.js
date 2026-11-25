@@ -1,116 +1,10 @@
 import { decodeBackup, encodeBackup, newId, readSave, writeSave } from './storage.js';
 /* ================= data ================= */
-import { GAL, gallonsToLiters, litersToGallons, fromVolumeDisplay, toVolumeDisplay, alkAsCaCO3 } from './units.js';
+import { gallonsToLiters, litersToGallons, fromVolumeDisplay, toVolumeDisplay, alkAsCaCO3 } from './units.js';
+import { INGREDIENTS, ingredientById as ingById } from './catalog.js';
 import { evaluate, effectiveDose, mixVolumes } from './evaluate.js';
-var IONS = [
-  {id:"Ca",  name:"Calcium",      sym:"Ca²⁺",  ceil:300},
-  {id:"Mg",  name:"Magnesium",    sym:"Mg²⁺",  ceil:100},
-  {id:"Na",  name:"Sodium",       sym:"Na⁺",   ceil:250},
-  {id:"SO4", name:"Sulfate",      sym:"SO₄²⁻", ceil:800},
-  {id:"Cl",  name:"Chloride",     sym:"Cl⁻",   ceil:350},
-  {id:"HCO3",name:"Bicarbonate",  sym:"HCO₃⁻", ceil:400}
-];
-function ionById(id){ for (var i=0;i<IONS.length;i++) if (IONS[i].id===id) return IONS[i]; return null; }
+import { IONS, ionById, PRESETS, presetById, defaultState } from './data.js';
 
-/* contributions: ppm added per 1 unit (g or mL) dissolved in 1 gallon */
-var INGREDIENTS = [
-  {id:"gypsum",  name:"Gypsum", sub:"calcium sulfate", unit:"g", maxPerGal:3,
-   per:{Ca:61.5, SO4:147.4}},
-  {id:"cacl2",   name:"Calcium Chloride", sub:"dihydrate", unit:"g", maxPerGal:3,
-   per:{Ca:72, Cl:127}},
-  {id:"epsom",   name:"Epsom Salt", sub:"magnesium sulfate", unit:"g", maxPerGal:3,
-   per:{Mg:26.2, SO4:103}},
-  {id:"mgcl2",   name:"Magnesium Chloride", sub:"hexahydrate flakes", unit:"g", maxPerGal:3,
-   per:{Mg:31.7, Cl:92}},
-  {id:"nacl",    name:"Table Salt", sub:"non-iodized sodium chloride", unit:"g", maxPerGal:1.5,
-   per:{Na:104, Cl:160}},
-  {id:"nahco3",  name:"Baking Soda", sub:"sodium bicarbonate — raises alkalinity", unit:"g", maxPerGal:2,
-   per:{Na:72.3, HCO3:191.7}},
-  {id:"chalk",   name:"Chalk", sub:"calcium carbonate — dissolves poorly without acid/CO₂", unit:"g", maxPerGal:2,
-   per:{Ca:105.6, HCO3:161}},
-  {id:"lime",    name:"Pickling Lime", sub:"calcium hydroxide — raises alkalinity & pH", unit:"g", maxPerGal:1,
-   per:{Ca:143, HCO3:435}},
-  {id:"kcl",     name:"Potassium Chloride", sub:"chloride without sodium (potassium not tracked)", unit:"g", maxPerGal:2,
-   per:{Cl:125.5}},
-  {id:"khco3",   name:"Potassium Bicarbonate", sub:"raises alkalinity without sodium", unit:"g", maxPerGal:2,
-   per:{HCO3:161}},
-  {id:"citric",  name:"Citric Acid", sub:"lowers alkalinity; can taste lemony in excess", unit:"g", maxPerGal:2,
-   per:{HCO3:-168}},
-  {id:"lactic",  name:"Lactic Acid 88%", sub:"lowers alkalinity", unit:"mL", maxPerGal:1,
-   per:{HCO3:-176}},
-  {id:"phosphoric", name:"Phosphoric Acid 85%", sub:"lowers alkalinity; flavour-neutral", unit:"mL", maxPerGal:1,
-   per:{HCO3:-200}},
-  {id:"kmeta",   name:"Potassium Metabisulfite", sub:"dechlorination — dose auto-calculated (mg)", unit:"mg", maxPerGal:0, auto:"kmeta"},
-  {id:"campden", name:"Campden Tablets", sub:"dechlorination — 1 tablet per 20 gal (crush before use)", unit:"tablets", maxPerGal:0, auto:"campden"},
-  {id:"distilled", name:"Distilled Water", sub:"dilutes the starting water", unit:"L", maxPerGal:0, auto:"distilled"}
-];
-function ingById(id){ for (var i=0;i<INGREDIENTS.length;i++) if (INGREDIENTS[i].id===id) return INGREDIENTS[i]; return null; }
-
-function T(ca,mg,na,so4,cl,hco3){
-  function r(a){ return {min:a[0], max:a[1], ideal:a[2]}; }
-  return {Ca:r(ca), Mg:r(mg), Na:r(na), SO4:r(so4), Cl:r(cl), HCO3:r(hco3)};
-}
-var PRESETS = [
-  {id:"pilsner", name:"Pilsner", kind:"Style",
-   blurb:"Soft and low in everything, echoing Pilsen’s famously soft water. Low alkalinity and modest sulfate keep the finish crisp and let delicate noble hops show without harshness.",
-   target:T([20,60,35],[0,15,8],[0,25,10],[10,60,30],[15,60,35],[0,60,30])},
-  {id:"pale-ale", name:"Pale Ale", kind:"Style",
-   blurb:"A balanced all-rounder: firm calcium for yeast health and clarity, sulfate ahead of chloride for a drier, hoppier edge, and low alkalinity so the malt doesn’t taste chalky.",
-   target:T([50,100,75],[0,20,10],[0,40,15],[100,200,150],[40,90,60],[0,120,60])},
-  {id:"ipa", name:"IPA", kind:"Style",
-   blurb:"Sulfate pushed high (200–350 ppm) to dry the finish and sharpen hop bitterness and aroma, with chloride kept moderate so the beer stays lean rather than juicy-soft.",
-   target:T([75,150,100],[0,25,12],[0,40,15],[200,350,250],[50,100,75],[0,100,50])},
-  {id:"stout", name:"Stout", kind:"Style",
-   blurb:"Higher alkalinity buffers the acidity of dark roasted malts, and balanced sulfate/chloride keeps the body full and smooth rather than thin or harsh.",
-   target:T([50,100,75],[0,25,12],[0,50,25],[40,110,75],[40,110,75],[100,200,150])},
-  {id:"porter", name:"Porter", kind:"Style",
-   blurb:"Like the stout profile but a touch softer: moderate alkalinity for the chocolate and brown malts, with chloride roughly matching sulfate for a rounded, malty palate.",
-   target:T([40,90,60],[0,20,10],[0,45,20],[35,90,60],[35,90,60],[80,170,120])},
-  {id:"wheat", name:"Wheat Beer", kind:"Style",
-   blurb:"Gentle and neutral — low sulfate so noble hops and wheat softness stay in front, moderate alkalinity, nothing that would push flavours around.",
-   target:T([30,80,50],[0,20,10],[0,30,10],[30,90,60],[30,90,60],[40,130,80])},
-  {id:"burton", name:"Burton-on-Trent", kind:"Historical",
-   blurb:"The water that made pale ale famous: wells in Burton drew through gypsum beds, loading the water with calcium and sulfate. The result is a very dry, firm bitterness — the benchmark hoppy profile, and strong enough to taste on its own.",
-   target:T([200,300,270],[30,60,45],[25,100,55],[500,800,650],[10,60,35],[120,280,200])},
-  {id:"dublin", name:"Dublin", kind:"Historical",
-   blurb:"High bicarbonate from limestone country — the classic stout water. Its alkalinity is exactly what a grist full of acidic roast barley needs to land at a drinkable mash acidity.",
-   target:T([90,150,120],[0,15,5],[0,30,12],[30,80,55],[5,35,19],[200,320,260])},
-  {id:"munich", name:"Munich", kind:"Historical",
-   blurb:"Moderate calcium with high alkalinity and almost no sulfate or chloride — water for dark lagers, where the alkalinity suits dark malts and the softness keeps lagers smooth.",
-   target:T([50,100,75],[10,30,18],[0,10,2],[0,25,10],[0,10,2],[100,200,150])},
-  {id:"vienna", name:"Vienna", kind:"Historical",
-   blurb:"Hard and alkaline like Munich but with far more magnesium and some sulfate — the water behind amber Vienna lagers, firm enough to keep the malt sweetness from turning flabby.",
-   target:T([120,200,160],[40,80,60],[0,20,8],[80,170,125],[0,30,12],[180,300,240])}
-];
-function presetById(id){ for (var i=0;i<PRESETS.length;i++) if (PRESETS[i].id===id) return PRESETS[i]; return null; }
-
-/* ================= state ================= */
-function blankTarget(){ return T([0,100,50],[0,20,10],[0,40,15],[0,150,75],[0,100,50],[0,150,75]); }
-function defaultDrawer(){
-  var d = {};
-  var owned = {gypsum:1, cacl2:1, epsom:1, nacl:1, nahco3:1, lactic:1, distilled:1};
-  INGREDIENTS.forEach(function(g){
-    d[g.id] = {owned: !!owned[g.id], unlimited: !!owned[g.id], stock: 100};
-  });
-  d.campden.stock = 24; d.kmeta.stock = 50000;
-  return d;
-}
-function defaultState(){
-  var p = presetById("pale-ale");
-  var s = {
-    unit:"gal", batchL:gallonsToLiters(5), scaleStep:0.1,
-    startName:"Distilled",
-    start:{Ca:0,Mg:0,Na:0,SO4:0,Cl:0,HCO3:0,pH:7,chlorine:0,chlorType:"none"},
-    targetPreset:"pale-ale",
-    target: JSON.parse(JSON.stringify(p.target)),
-    adds:{}, enabled:{},
-    dechlor:{mode:"kmeta", rateMgGal:30, enabled:true},
-    drawer: defaultDrawer(),
-    savedStarts:[], customPresets:[]
-  };
-  INGREDIENTS.forEach(function(g){ s.adds[g.id]=0; s.enabled[g.id]=true; });
-  return s;
-}
 const getStorage = () => window.localStorage;
 const loaded = readSave(getStorage, defaultState());
 var S = loaded.state;
@@ -350,7 +244,7 @@ function renderAdds(){
       '<p class="anote" style="margin:6px 0 0">Set a chlorine or chloramine level in Starting Water and the dose is worked out here automatically, using whichever you have in the drawer.</p></div>';
   }
   INGREDIENTS.forEach(function(g){
-    if (g.auto) return;
+    if (g.auto || g.inventoryOnly) return;
     var d = S.drawer[g.id];
     if (!d || !d.owned){
       html += '<div class="addrow disabled"><div class="ahead">'+
@@ -364,7 +258,7 @@ function renderAdds(){
     var cap = stockCap(g);
     var stockFrac = (cap===Infinity || max<=0) ? 1 : Math.max(0, Math.min(1, cap/max));
     var en = S.enabled[g.id];
-    var step = g.unit==="g" ? S.scaleStep : 0.1;
+    var step = g.unit==="g" ? Math.max(g.step, S.scaleStep) : g.step;
     html += '<div class="addrow'+(en?"":" disabled")+'" data-addrow="'+g.id+'"><div class="ahead">'+
       '<label class="check"><input type="checkbox" data-enable="'+g.id+'" '+(en?"checked":"")+' aria-label="Enable '+esc(g.name)+'">'+
       '<span class="aname">'+esc(g.name)+'</span></label>'+
@@ -496,14 +390,14 @@ function solve(){
     vars.push({id:"distilled", max: Math.min(S.batchL, stockCap(ingById("distilled")))});
   }
   INGREDIENTS.forEach(function(g){
-    if (!g.per) return;
+    if (!g.mass) return;
     if (!S.enabled[g.id] || !S.drawer[g.id].owned) return;
     vars.push({id:g.id, max: Math.min(sliderMax(g), stockCap(g))});
   });
   vars.forEach(function(v){ v.max = isFinite(v.max) ? v.max : sliderMax(ingById(v.id)) || S.batchL; if (v.id==="distilled" && !isFinite(v.max)) v.max = S.batchL; });
   // Start with a feasible recipe before evaluating any candidates.
   INGREDIENTS.forEach(g => {
-    if (!S.enabled[g.id] || !g.per && g.id !== "distilled") return;
+    if (!S.enabled[g.id] || !g.mass && g.id !== "distilled") return;
     const bound = vars.find(v => v.id === g.id)?.max ?? 0;
     S.adds[g.id] = Math.min(S.adds[g.id], bound);
   });
