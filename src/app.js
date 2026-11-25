@@ -5,11 +5,13 @@ import { diagnose } from './solver.js';
 import { dechlorination } from './dechlorination.js';
 import { evaluate, mixVolumes, usesDilution } from './evaluate.js';
 import { stockCap as availableStock, doseMaximum, doseGrid, doseAt, doseIndex, snapDose, shortfalls } from './inventory.js';
+import { createHistory } from './history.js';
 import { IONS, STARTS, PRESETS, presetById, defaultState } from './data.js';
 
 const getStorage = () => window.localStorage;
 const loaded = readSave(getStorage, defaultState());
-var S = loaded.state;
+let S = loaded.state;
+const history = createHistory(S);
 const saveMessages = {
   ready: "Changes save in this browser.",
   saved: "Saved in this browser.",
@@ -18,35 +20,44 @@ const saveMessages = {
 };
 let revision = 0;
 let lastSolve = null;
-function saveLS(){
-  revision++;
-  lastSolve = null;
+function persistState(){
   $("saveStatus").textContent = saveMessages[writeSave(getStorage, S) ? "saved" : "unavailable"];
 }
 
-/* ================= undo ================= */
-var undoStack = [], lastPush = 0, restoring = false;
-function snapshot(){
-  return JSON.stringify(S);
+function updateHistoryButtons(){
+  $("undoBtn").disabled = !history.canUndo;
+  $("redoBtn").disabled = !history.canRedo;
 }
-function pushUndo(coalesce){
-  if (restoring) return;
-  var now = Date.now();
-  if (coalesce && now - lastPush < 700) return;
-  lastPush = now;
-  undoStack.push(snapshot());
-  if (undoStack.length > 60) undoStack.shift();
-  document.getElementById("undoBtn").disabled = false;
+
+function recordChange({ persistNoop = false } = {}){
+  const changed = history.commit(S);
+  if (changed) {
+    revision++;
+    lastSolve = null;
+    if (!$("solveBtn").disabled) $("solveStatus").textContent = "";
+    updateHistoryButtons();
+  }
+  if (changed || persistNoop) persistState();
 }
-function undo(){
-  if (!undoStack.length) return;
-  var snap = JSON.parse(undoStack.pop());
-  restoring = true;
-  Object.keys(snap).forEach(function(k){ S[k] = snap[k]; });
-  restoring = false;
-  document.getElementById("undoBtn").disabled = !undoStack.length;
-  saveLS(); renderAll();
-  toast("Undone");
+
+function restoreHistory(direction){
+  const state = history[direction]();
+  if (!state) return;
+  const active = document.activeElement;
+  const drawerControl = active?.closest("#drawerBody")
+    ? [...active.attributes].find(attribute => attribute.name.startsWith("data-d-")) : null;
+  S = state;
+  revision++;
+  lastSolve = null;
+  if (!$("solveBtn").disabled) $("solveStatus").textContent = "";
+  persistState();
+  updateHistoryButtons();
+  renderAll();
+  if (drawerControl) {
+    const replacement = $("drawerBody").querySelector("[" + drawerControl.name + '="' + drawerControl.value + '"]:not(:disabled)');
+    (replacement ?? $("doneDrawerBtn")).focus({ preventScroll: true });
+  }
+  toast(direction === "undo" ? "Undone" : "Redone");
 }
 
 /* ================= helpers ================= */
@@ -63,7 +74,7 @@ function residualAlk(profile){
   return [profile.Alk, profile.Ca, profile.Mg].every(Number.isFinite)
     ? profile.Alk - (profile.Ca/1.4 + profile.Mg/1.7) : null;
 }
-function sourceVolume(){ return mixVolumes(S).sourceL; }
+function sourceVolume(state = S){ return mixVolumes(state).sourceL; }
 
 /* stock caps, expressed in each ingredient's own unit */
 function stockCap(g){ return availableStock(S, g.id); }
@@ -105,8 +116,8 @@ function renderStart(){
   </span>`).join("");
   updateStartTiles();
 }
-function updateStartTiles(){
-  $("startAmt").innerHTML = volLabel(sourceVolume()) + ' <small>of ' + volLabel(S.batchL) + '</small>';
+function updateStartTiles(state = S){
+  $("startAmt").innerHTML = volLabel(sourceVolume(state)) + ' <small>of ' + volLabel(S.batchL) + '</small>';
 }
 
 function currentPresetObj(){
@@ -153,11 +164,11 @@ function sliderBG(frac, stockFrac){
   layers.push("linear-gradient(90deg, var(--accent) 0 "+(frac*100).toFixed(1)+"%, var(--track) "+(frac*100).toFixed(1)+"% 100%)");
   return layers.join(", ");
 }
-function treatmentText(dose) {
+function treatmentText(dose, sourceL = sourceVolume()) {
   if (dose.status === "disabled") return "Treatment disabled.";
   if (dose.status === "none") return "No disinfectant dose required.";
   if (dose.status === "missing") return "Enter " + dose.missing.join(" and ") + " to calculate treatment.";
-  return "For " + volLabel(sourceVolume()) + " of source water, the recipe includes " +
+  return "For " + volLabel(sourceL) + " of source water, the recipe includes " +
     dose.applied + " " + dose.unit + ". Required " + dose.required + " " + dose.unit + "." +
     (dose.status === "short" ? " Insufficient stock for full treatment." : "");
 }
@@ -241,14 +252,15 @@ function diagnosticText(check) {
   return (check.difference < 0.01 ? "<0.01" : fmt(check.difference, 2)) + " " + unit + " " + check.status;
 }
 
-function renderFinal(){
-  const result = evaluate(S);
+function renderFinal(state = S){
+  const result = evaluate(state);
+  const solved = state === S ? lastSolve : null;
   const fin = result.profile;
-  const checks = diagnose(result, S.target);
+  const checks = diagnose(result, state.target);
   const statusByKey = new Map(checks.map(check => [check.key, check]));
   var html = "";
   IONS.forEach(function(ion){
-    var t = S.target[ion.id], v = fin[ion.id], ceil = ion.ceil;
+    var t = state.target[ion.id], v = fin[ion.id], ceil = ion.ceil;
     var pct = function(x){ return Math.max(0, Math.min(100, x/ceil*100)); };
     const check = statusByKey.get(ion.id);
     const inR = check.status === "in range";
@@ -270,24 +282,24 @@ function renderFinal(){
   if (phCheck) {
     items.push({bad:phCheck.status !== "in range", text:"pH target · " + diagnosticText(phCheck)});
   }
-  if (lastSolve && !lastSolve.complete) {
+  if (solved && !solved.complete) {
     items.push({bad:false, text:"Best recipe found within the search limit. A closer recipe may exist."});
   }
-  if (lastSolve?.shopping) {
-    for (const purchase of lastSolve.shopping.purchases) {
+  if (solved?.shopping) {
+    for (const purchase of solved.shopping.purchases) {
       const g = ingById(purchase.id);
       items.push({bad:false, text:"Buying " + amountLabel(g, purchase.amount) + " of " + g.name +
         " could improve the target fit. The comparison used " + amountLabel(g, purchase.dose) + "."});
     }
   }
   if (treatment.status === "short" || treatment.status === "missing") {
-    items.push({bad:true, text:treatmentText(treatment)});
+    items.push({bad:true, text:treatmentText(treatment, result.volumes.sourceL)});
   }
   if (treatment.shortage > 0) {
     items.push({bad:true, text:"Shopping list · " + ingById(treatment.id).name + " · " +
       fmt(treatment.shortage, 3) + " " + treatment.unit});
   }
-  const shortages = shortfalls(S, INGREDIENTS);
+  const shortages = shortfalls(state, INGREDIENTS);
   if (shortages.length || treatment.shortage > 0) {
     items.unshift({bad:true, text:"Planned recipe needs more stock."});
   }
@@ -364,9 +376,8 @@ async function solve(){
     }
     const changed = JSON.stringify(S.adds) !== JSON.stringify(solved.adds);
     if (changed) {
-      pushUndo(false);
       S.adds = solved.adds;
-      saveLS();
+      recordChange();
     }
     lastSolve = solved;
     refreshComputed();
@@ -413,9 +424,8 @@ async function importBackup(event){
   if (!file) return;
   try {
     const data = decodeBackup(await file.text(), defaultState());
-    pushUndo(false);
     S = data;
-    saveLS();
+    recordChange({ persistNoop: true });
     renderAll();
     toast("Backup imported");
   } catch (error) {
@@ -431,13 +441,20 @@ function keepDrawerFocus(input) {
 }
 
 function bind(){
-  $("undoBtn").addEventListener("click", undo);
+  $("undoBtn").addEventListener("click", () => restoreHistory("undo"));
+  $("redoBtn").addEventListener("click", () => restoreHistory("redo"));
+  document.addEventListener("input", event => {
+    if (event.target.type === "number") revision++;
+  });
   document.addEventListener("keydown", function(e){
-    if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z") && !e.shiftKey){
-      var tag = (e.target && e.target.tagName) || "";
-      if (tag === "TEXTAREA") return;
-      e.preventDefault(); undo();
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "z") {
+      const nativeEdit = e.target.closest?.("textarea, input:not([type=range]):not([type=checkbox]), [contenteditable]");
+      if (!nativeEdit) {
+        e.preventDefault();
+        restoreHistory(e.shiftKey ? "redo" : "undo");
+      }
     }
+    if (e.key === "Escape" && preview) cancelPreview();
     if (!$("drawer").classList.contains("open")) return;
     if (e.key === "Escape") closeDrawer();
     if (e.key === "Tab") {
@@ -457,17 +474,15 @@ function bind(){
   $("closeDrawerBtn").addEventListener("click", closeDrawer);
   $("doneDrawerBtn").addEventListener("click", closeDrawer);
   $("deselectAll").addEventListener("click", () => {
-    pushUndo(false);
     for (const item of Object.values(S.drawer)) {
       item.owned = false;
       item.unlimited = false;
     }
-    saveLS(); renderDrawer(); refreshComputed();
+    recordChange(); renderDrawer(); refreshComputed();
   });
   $("backdrop").addEventListener("click", closeDrawer);
 
   $("batchInput").addEventListener("change", function(){
-    pushUndo(false);
     const v = this.valueAsNumber;
     if (!Number.isFinite(v) || v <= 0) {
       this.value = fmt(toVolumeDisplay(S.batchL, S.unit), 6);
@@ -475,28 +490,27 @@ function bind(){
       return;
     }
     S.batchL = fromVolumeDisplay(v, S.unit);
-    saveLS(); renderAll();
+    recordChange(); renderAll();
   });
-  $("unitGal").addEventListener("click", function(){ if (S.unit!=="gal"){ pushUndo(false); S.unit="gal"; saveLS(); renderAll(); } });
-  $("unitL").addEventListener("click", function(){ if (S.unit!=="L"){ pushUndo(false); S.unit="L"; saveLS(); renderAll(); } });
+  $("unitGal").addEventListener("click", function(){ if (S.unit!=="gal"){ S.unit="gal"; recordChange(); renderAll(); } });
+  $("unitL").addEventListener("click", function(){ if (S.unit!=="L"){ S.unit="L"; recordChange(); renderAll(); } });
   $("scaleStep").addEventListener("change", function(){
-    pushUndo(false); S.scaleStep = parseFloat(this.value) || 0.1; saveLS(); renderAdds();
+    S.scaleStep = parseFloat(this.value) || 0.1; recordChange(); renderAdds();
   });
 
   /* starting water */
   function setSource(id) {
     const record = STARTS.find(p => p.id === id) ?? S.savedStarts.find(p => "saved:" + p.id === id);
     if (!record) return;
-    pushUndo(false);
     S.start = structuredClone(record.profile);
     S.startId = id;
     S.startName = record.name;
-    saveLS(); renderStart(); refreshComputed();
+    recordChange(); renderStart(); refreshComputed();
   }
   function editReport() {
     S.startId = "custom";
     S.startName = "Custom";
-    saveLS(); renderStart(); refreshComputed();
+    recordChange(); renderStart(); refreshComputed();
   }
   function readReport(input, key) {
     if (input.validity.badInput || input.value !== "" && !input.validity.valid) {
@@ -507,25 +521,21 @@ function bind(){
     const value = input.value === "" ? null : input.valueAsNumber;
     const converted = key === "Alk" && S.start.alkBasis === "HCO3" ? alkAsCaCO3(value) : value;
     if (converted === S.start[key]) return;
-    pushUndo(false);
     S.start[key] = converted;
     editReport();
   }
   $("sourceSelect").addEventListener("change", event => setSource(event.target.value));
   $("alkBasis").addEventListener("change", event => {
-    pushUndo(false);
     S.start.alkBasis = event.target.value;
-    saveLS(); renderStart();
+    recordChange(); renderStart();
   });
   $("startIons").addEventListener("change", event => readReport(event.target, event.target.dataset.report));
   $("chlorPpm").addEventListener("change", event => readReport(event.target, "chlorine"));
   $("chlorType").addEventListener("change", event => {
-    pushUndo(false);
     S.start.chlorType = event.target.value;
     editReport();
   });
   $("chlorBasis").addEventListener("change", event => {
-    pushUndo(false);
     S.start.chlorBasis = event.target.value || null;
     editReport();
   });
@@ -533,7 +543,6 @@ function bind(){
     const input = $("saveStartName");
     const name = input.value.trim();
     if (!name) { toast("Give the profile a name first."); return; }
-    pushUndo(false);
     const existing = S.savedStarts.find(p => p.name.toLowerCase() === name.toLowerCase());
     const profile = structuredClone(S.start);
     if (existing) existing.profile = profile;
@@ -542,16 +551,15 @@ function bind(){
     S.startId = "saved:" + record.id;
     S.startName = record.name;
     input.value = "";
-    saveLS(); renderStart(); refreshComputed();
+    recordChange(); renderStart(); refreshComputed();
   });
   $("startChips").addEventListener("click", event => {
     const { applyStart, delStart } = event.target.dataset;
     if (applyStart) setSource("saved:" + applyStart);
     if (delStart) {
-      pushUndo(false);
       S.savedStarts = S.savedStarts.filter(p => p.id !== delStart);
       if (S.startId === "saved:" + delStart) editReport();
-      else { saveLS(); renderStart(); }
+      else { recordChange(); renderStart(); }
     }
   });
 
@@ -559,38 +567,34 @@ function bind(){
   function setTarget(id) {
     const preset = presetById(id) ?? S.customPresets.find(p => "custom:" + p.id === id);
     if (!preset) return;
-    pushUndo(false);
     S.targetPreset = id;
     S.target = structuredClone(preset.target);
-    saveLS(); renderPresetSelect(); renderTarget(); renderFinal();
+    recordChange(); renderPresetSelect(); renderTarget(); renderFinal();
   }
   $("presetSel").addEventListener("change", event => setTarget(event.target.value));
   $("savePresetBtn").addEventListener("click", () => {
     const name = $("savePresetName").value.trim();
     if (!name) { toast("Give the target a name first."); return; }
-    pushUndo(false);
     const id = newId();
     S.customPresets.push({ id, name, kind: "Custom", blurb: $("savePresetNote").value.trim(), target: structuredClone(S.target) });
     S.targetPreset = "custom:" + id;
     $("savePresetName").value = ""; $("savePresetNote").value = "";
-    saveLS(); renderPresetSelect();
+    recordChange(); renderPresetSelect();
   });
   $("presetChips").addEventListener("click", event => {
     const { applyPreset, delPreset } = event.target.dataset;
     if (applyPreset) setTarget("custom:" + applyPreset);
     if (delPreset) {
-      pushUndo(false);
       S.customPresets = S.customPresets.filter(p => p.id !== delPreset);
       if (S.targetPreset === "custom:" + delPreset) S.targetPreset = "__customised";
-      saveLS(); renderPresetSelect();
+      recordChange(); renderPresetSelect();
     }
   });
   function commitTargetEdit() {
     S.targetPreset = "__customised";
-    saveLS(); renderPresetSelect(); renderTarget(); renderFinal();
+    recordChange(); renderPresetSelect(); renderTarget(); renderFinal();
   }
   $("pHTargetEnabled").addEventListener("change", event => {
-    pushUndo(false);
     S.target.pH = event.target.checked ? { min: 5.5, ideal: 6, max: 7 } : null;
     commitTargetEdit();
   });
@@ -606,7 +610,6 @@ function bind(){
       return;
     }
     if (value === S.target[targetKey][targetBound]) return;
-    pushUndo(false);
     S.target[targetKey] = range;
     commitTargetEdit();
   });
@@ -614,78 +617,91 @@ function bind(){
   /* additions */
   let preview;
   const list = $("addsList");
-  function rawDose(input, id) {
+  function rawDose(input, g) {
+    if (input.dataset.slider) return doseAt(doseGrid(S, g, Infinity), input.valueAsNumber);
     const value = Math.max(0, Number(input.value));
-    if (input.dataset.slider) return doseAt(doseGrid(S, ingById(id), Infinity), value);
-    return id === "distilled" ? fromVolumeDisplay(value, S.unit) : value;
+    return g.id === "distilled" ? fromVolumeDisplay(value, S.unit) : value;
+  }
+  function cancelPreview() {
+    if (!preview) return;
+    preview = undefined;
+    refreshComputed();
   }
   list.addEventListener("input", event => {
     const input = event.target;
     const id = input.dataset.slider;
     if (!id) return;
     const g = ingById(id);
-    if (!preview) {
-      preview = { id, original: S.adds[id] };
+    if (preview !== input) {
+      preview = input;
       revision++;
     }
-    const amount = configPreviewDose(g, rawDose(input, id));
-    S.adds[id] = amount;
+    const amount = rawDose(input, g);
+    const view = { ...S, adds: { ...S.adds, [id]: amount } };
     const row = input.closest(".addrow");
     row.querySelector("[data-amt]").value = id === "distilled" ? fmt(toVolumeDisplay(amount, S.unit), 6) : amount;
     input.setAttribute("aria-valuetext", amountLabel(g, amount));
-    row.querySelector("[data-stock-warning]").hidden = rawDose(input, id) <= stockCap(g);
+    row.querySelector("[data-stock-warning]").hidden = amount - stockCap(g) <= 1e-9;
     input.style.background = sliderBG(amount / sliderMax(g), Math.min(1, stockCap(g) / sliderMax(g)));
     const treatment = list.querySelector("[data-treatment]");
-    if (treatment) treatment.textContent = treatmentText(dechlorination(S, sourceVolume()));
-    updateStartTiles(); renderFinal();
+    if (treatment) {
+      const sourceL = sourceVolume(view);
+      treatment.textContent = treatmentText(dechlorination(view, sourceL), sourceL);
+    }
+    updateStartTiles(view);
+    renderFinal(view);
   });
-  function configPreviewDose(g, amount) {
-    return snapDose(S, g, amount, Infinity);
-  }
-  list.addEventListener("pointercancel", () => {
-    if (!preview) return;
-    S.adds[preview.id] = preview.original;
-    preview = undefined;
-    refreshComputed();
+  list.addEventListener("pointercancel", cancelPreview);
+  list.addEventListener("pointerup", event => {
+    const input = event.target;
+    setTimeout(() => {
+      if (preview === input) cancelPreview();
+    }, 0);
   });
   list.addEventListener("change", event => {
     const input = event.target;
     const id = input.dataset.slider || input.dataset.amt;
     if (id) {
-      if (preview) S.adds[preview.id] = preview.original;
       preview = undefined;
-      const next = snapDose(S, ingById(id), rawDose(input, id));
-      if (next !== S.adds[id]) {
-        pushUndo(false);
-        S.adds[id] = next;
-        saveLS();
+      const g = ingById(id);
+      const focused = document.activeElement === input;
+      const unchanged = input.dataset.slider &&
+        input.valueAsNumber === doseIndex(doseGrid(S, g, Infinity), S.adds[id]);
+      if (!unchanged && !input.validity.badInput) {
+        const next = snapDose(S, g, rawDose(input, g));
+        if (next !== S.adds[id]) {
+          S.adds[id] = next;
+          recordChange();
+        }
       }
       refreshComputed();
-      list.querySelector(input.hasAttribute("data-slider") ? '[data-slider="' + id + '"]' : '[data-amt="' + id + '"]')?.focus();
+      if (focused) {
+        const selector = input.dataset.slider ? "data-slider" : "data-amt";
+        list.querySelector("[" + selector + '="' + id + '"]')?.focus({ preventScroll: true });
+      }
     }
     if (input.dataset.enable) {
-      pushUndo(false); S.enabled[input.dataset.enable] = input.checked; saveLS(); refreshComputed();
+      S.enabled[input.dataset.enable] = input.checked; recordChange(); refreshComputed();
     }
     if (input.hasAttribute("data-dechlor-enabled")) {
-      pushUndo(false); S.dechlor.enabled = input.checked; saveLS(); refreshComputed();
+      S.dechlor.enabled = input.checked; recordChange(); refreshComputed();
     }
     if (input.hasAttribute("data-dechlor-formulation")) {
       if (input.value !== "" && !input.validity.valid) { renderAdds(); toast("Enter a valid formulation."); return; }
-      pushUndo(false);
       S.dechlor[S.dechlor.mode === "campden" ? "campdenMg" : "assayPercent"] = input.value === "" ? null : Number(input.value);
-      saveLS(); refreshComputed();
+      recordChange(); refreshComputed();
     }
     if (input.hasAttribute("data-dechlor-mode")) {
-      pushUndo(false); S.dechlor.mode = input.value; saveLS(); refreshComputed();
+      S.dechlor.mode = input.value; recordChange(); refreshComputed();
     }
   });
 
   /* drawer */
   $("drawerBody").addEventListener("change", function(e){
     var t = e.target, id;
-    if ((id = t.getAttribute("data-d-owned"))){ pushUndo(false); S.drawer[id].owned = t.checked; saveLS(); keepDrawerFocus(t); renderAdds(); renderFinal(); }
-    else if ((id = t.getAttribute("data-d-unlim"))){ pushUndo(false); S.drawer[id].unlimited = t.checked; saveLS(); keepDrawerFocus(t); renderAdds(); }
-    else if ((id = t.getAttribute("data-d-stock"))){ pushUndo(false); S.drawer[id].stock = id === "distilled" ? fromVolumeDisplay(Math.max(0, Number(t.value)||0), S.unit) : Math.max(0, Number(t.value)||0); saveLS(); renderAdds(); renderFinal(); }
+    if ((id = t.getAttribute("data-d-owned"))){ S.drawer[id].owned = t.checked; recordChange(); keepDrawerFocus(t); renderAdds(); renderFinal(); }
+    else if ((id = t.getAttribute("data-d-unlim"))){ S.drawer[id].unlimited = t.checked; recordChange(); keepDrawerFocus(t); renderAdds(); }
+    else if ((id = t.getAttribute("data-d-stock"))){ S.drawer[id].stock = id === "distilled" ? fromVolumeDisplay(Math.max(0, Number(t.value)||0), S.unit) : Math.max(0, Number(t.value)||0); recordChange(); renderAdds(); renderFinal(); }
   });
 }
 

@@ -17,7 +17,8 @@
         </div>
         <div>
           <div class="site-tools">
-            <button type="button" class="btn" id="undoBtn" disabled>Undo</button>
+            <button type="button" class="btn" id="undoBtn" aria-keyshortcuts="Control+Z Meta+Z" disabled>Undo</button>
+            <button type="button" class="btn" id="redoBtn" aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z" disabled>Redo</button>
             <button type="button" class="btn" id="exportBtn">Export backup</button>
             <button type="button" class="btn" id="importBtn">Import backup</button>
             <input type="file" id="backupInput" accept=".json,application/json" hidden>
