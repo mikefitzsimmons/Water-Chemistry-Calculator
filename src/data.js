@@ -58,11 +58,11 @@ export function defaultState(){
   var s = {
     unit:"gal", batchL:gallonsToLiters(5), scaleStep:0.1,
     startName:"Distilled",
-    start:{Ca:0,Mg:0,Na:0,SO4:0,Cl:0,Alk:0,pH:7,assumed:true,chlorine:0,chlorType:"none"},
+    start:{Ca:0,Mg:0,Na:0,SO4:0,Cl:0,Alk:0,pH:7,assumed:true,chlorine:0,chlorType:"none",chlorBasis:"Cl2"},
     targetPreset:"pale-ale",
     target: JSON.parse(JSON.stringify(p.target)),
     adds:{}, enabled:{},
-    dechlor:{mode:"kmeta", rateMgGal:30, enabled:true},
+    dechlor:{mode:"kmeta", rateMgGal:null, enabled:true, assayPercent:100, campdenMg:null},
     drawer: defaultDrawer(),
     savedStarts:[], customPresets:[]
   };

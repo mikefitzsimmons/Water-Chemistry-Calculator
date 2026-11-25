@@ -1,4 +1,5 @@
 import { INGREDIENTS } from './catalog.js';
+import { dechlorination } from './dechlorination.js';
 import { carbonateBalance } from './carbonate.js';
 
 export const PROFILE_KEYS = ['Ca', 'Mg', 'Na', 'SO4', 'Cl', 'Alk'];
@@ -32,7 +33,10 @@ export function evaluate(state, ingredients = INGREDIENTS, keys = PROFILE_KEYS, 
       if (profile[key] != null) profile[key] += dissolvedContribution(dose, mg, batchL);
     }
   }
-  const chemistry = carbonateBalance(state.start, volumes, additions, 0, includePH);
+  const treatment = dechlorination(state, sourceL);
+  if (profile.SO4 != null) profile.SO4 += treatment.sulfateMg / batchL;
+  if (profile.Cl != null) profile.Cl += treatment.chlorideMg / batchL;
+  const chemistry = carbonateBalance(state.start, volumes, additions, treatment.acidMeq, includePH);
   if (keys.includes('Alk')) profile.Alk = chemistry.alkalinity;
-  return { profile, volumes, chemistry };
+  return { profile, volumes, chemistry, treatment };
 }

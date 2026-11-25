@@ -2,6 +2,7 @@ import { decodeBackup, encodeBackup, newId, readSave, writeSave } from './storag
 /* ================= data ================= */
 import { gallonsToLiters, litersToGallons, fromVolumeDisplay, toVolumeDisplay } from './units.js';
 import { INGREDIENTS, ingredientById as ingById } from './catalog.js';
+import { dechlorination } from './dechlorination.js';
 import { evaluate, mixVolumes } from './evaluate.js';
 import { stockCap as availableStock, doseMaximum, doseGrid, snapDose, shortfalls } from './inventory.js';
 import { IONS, ionById, PRESETS, presetById, defaultState } from './data.js';
@@ -68,17 +69,6 @@ function sliderMax(g){ return doseMaximum(S, g); }
 function computeFinal(){
   return evaluate(S, INGREDIENTS, IONS.map(ion => ion.id)).profile;
 }
-function dechlorDose(){
-  var cl = S.start.chlorine||0;
-  if (!cl || S.start.chlorType==="none") return null;
-  var mult = Math.max(1, cl/3);
-  if (S.dechlor.mode==="campden"){
-    return {kind:"campden", tablets: Math.ceil(litersToGallons(S.batchL)/20 * mult), label:""};
-  }
-  var mg = S.dechlor.rateMgGal * litersToGallons(S.batchL) * mult;
-  return {kind:"kmeta", mg: mg, grams: mg/1000, label:""};
-}
-
 /* ================= rendering: starting ================= */
 function renderStart(){
   var html = "";
@@ -92,6 +82,8 @@ function renderStart(){
   $("startNameTag").textContent = S.startName;
   $("chlorPpm").value = S.start.chlorine;
   $("chlorType").value = S.start.chlorType;
+  $("chlorBasis").value = S.start.chlorBasis ?? "";
+  $("chlorBasis").options[2].textContent = S.start.chlorType === "chloramine" ? "As NH₂Cl" : "As HOCl";
   var chips = '<span class="chip"><button type="button" class="apply" data-apply-start="-1">Distilled</button></span>';
   S.savedStarts.forEach(function(p, idx){
     chips += '<span class="chip"><button type="button" class="apply" data-apply-start="'+p.id+'">'+esc(p.name)+'</button>'+
@@ -168,38 +160,33 @@ function sliderBG(frac, stockFrac){
   layers.push("linear-gradient(90deg, var(--accent) 0 "+(frac*100).toFixed(1)+"%, var(--track) "+(frac*100).toFixed(1)+"% 100%)");
   return layers.join(", ");
 }
+function treatmentText(dose) {
+  if (dose.status === "disabled") return "Treatment disabled.";
+  if (dose.status === "none") return "No disinfectant dose required.";
+  if (dose.status === "missing") return "Enter " + dose.missing.join(" and ") + " to calculate treatment.";
+  return "For " + volLabel(sourceVolume()) + " of source water, the recipe includes " +
+    dose.applied + " " + dose.unit + ". Required " + dose.required + " " + dose.unit + "." +
+    (dose.status === "short" ? " Insufficient stock for full treatment." : "");
+}
+
 function renderAdds(){
   var html = "";
   var anyOwned = false;
-  /* dechlorination auto row first when relevant */
-  var dose = dechlorDose();
-  if (dose){
-    var gId = dose.kind==="campden" ? "campden" : "kmeta";
-    var g = ingById(gId), d = S.drawer[gId];
-    var owned = d && d.owned;
-    var need = dose.kind==="campden" ? dose.tablets : dose.mg;
-    var cap = stockCap(g);
-    var short = owned && cap < need;
-    html += '<div class="addrow'+(owned?"":" disabled")+'"><div class="ahead">'+
-      '<label class="check"><input type="checkbox" data-dechlor-enabled '+(S.dechlor.enabled?"checked":"")+(owned?"":" disabled")+'> '+
-      '<span class="aname">'+esc(g.name)+'</span></label> <span class="tag">auto dose</span></div>'+
-      '<p class="anote" style="margin:6px 0 0">For '+(fmt(S.start.chlorine,1))+' ppm '+esc(S.start.chlorType)+' in '+volLabel(S.batchL)+': '+
-      (dose.kind==="campden" ? '<b>'+dose.tablets+' tablet'+(dose.tablets===1?"":"s")+'</b> (crush, stir in, wait a few minutes)'
-                             : '<b>'+fmt(dose.mg)+' mg</b> ('+fmt(dose.grams,2)+' g) at '+fmt(S.dechlor.rateMgGal)+' mg/gal')+
-      (owned ? (d.unlimited ? ' · unlimited in drawer' : ' · you have '+fmt(cap, dose.kind==="campden"?0:1)+' '+g.unit) : ' · not in your drawer')+'</p>'+
-      (short ? '<p class="warn">You don’t have enough in the drawer for a full dose — get more before brew day.</p>' : '')+
-      (!owned ? '<p class="warn">Add it in the Ingredient Drawer to use automatic dechlorination.</p>' : '')+
-      '<div class="mmrow"><label>Method '+
-      '<select data-dechlor-mode><option value="kmeta"'+(S.dechlor.mode==="kmeta"?" selected":"")+'>Potassium metabisulfite</option>'+
-      '<option value="campden"'+(S.dechlor.mode==="campden"?" selected":"")+'>Campden tablets</option></select></label>'+
-      (S.dechlor.mode==="kmeta" ? '<label>K-meta rate (mg/gal) <input type="number" min="5" max="120" step="1" value="'+fmt(S.dechlor.rateMgGal)+'" data-dechlor-rate></label>' : '')+
-      '</div></div>';
-    if (owned) anyOwned = true;
-  }
-  if (!dose){
-    html += '<div class="addrow disabled"><div class="ahead"><span class="aname">Dechlorination</span>'+
-      '<span class="anote">potassium metabisulfite or Campden tablets</span></div>'+
-      '<p class="anote" style="margin:6px 0 0">Set a chlorine or chloramine level in Starting Water and the dose is worked out here automatically, using whichever you have in the drawer.</p></div>';
+  if (S.start.chlorType !== "none") {
+    const dose = dechlorination(S, sourceVolume());
+    const campden = S.dechlor.mode === "campden";
+    html += `<div class="addrow">
+      <div class="ahead"><label class="check"><input type="checkbox" data-dechlor-enabled ${S.dechlor.enabled ? "checked" : ""}> Dechlorination</label></div>
+      <div class="mmrow"><label>Product <select data-dechlor-mode>
+        <option value="kmeta" ${campden ? "" : "selected"}>Potassium metabisulfite powder</option>
+        <option value="campden" ${campden ? "selected" : ""}>Potassium metabisulfite tablets</option>
+      </select></label>
+      <label>${campden ? "Active mg per tablet" : "Powder assay (%)"}
+        <input type="number" min="0.01" ${campden ? "" : 'max="100"'} step="any"
+          value="${(campden ? S.dechlor.campdenMg : S.dechlor.assayPercent) ?? ""}" data-dechlor-formulation>
+      </label></div>
+      <p data-treatment class="anote">${esc(treatmentText(dose))}</p>
+    </div>`;
   }
   INGREDIENTS.forEach(function(g){
     if (g.auto || g.inventoryOnly) return;
@@ -267,29 +254,26 @@ function renderFinal(fin, notes){
       '<span class="fv">'+fmt(v)+' <small class="'+(inR?"inrange":"outrange")+'">target '+fmt(t.min, 2)+'–'+fmt(t.max, 2)+'</small></span></div>';
   });
   $("finalRows").innerHTML = html;
-  const chemistry = evaluate(S).chemistry;
+  const { chemistry, treatment } = evaluate(S);
   $("finalPH").textContent = chemistry.pH === null
     ? "Unavailable · enter " + chemistry.missing.join(" and ")
     : fmt(chemistry.pH, 2) + (chemistry.assumed ? " · assumed source data" : "");
   $("finalRA").innerHTML = fmt(residualAlk(fin)) + ' <small>ppm as CaCO₃</small>';
   $("finalRatio").textContent = fin.Cl > 0 ? fmt(fin.SO4/fin.Cl,2)+" : 1" : "—";
-  var dose = dechlorDose();
-  var items = [];
-  if (notes) items = notes.slice();
-  if (dose && S.dechlor.enabled){
-    var gId = dose.kind==="campden" ? "campden" : "kmeta";
-    var cap = stockCap(ingById(gId));
-    var need = dose.kind==="campden" ? dose.tablets : dose.mg;
-    if (!S.drawer[gId].owned) items.push({bad:true, text:"Your starting water is "+S.start.chlorType+"-treated but "+ingById(gId).name+" isn’t in your drawer — the chlorine/chloramine won’t be removed."});
-    else if (cap < need) items.push({bad:true, text:"Dechlorination needs "+(dose.kind==="campden" ? dose.tablets+" Campden tablets" : fmt(dose.mg)+" mg potassium metabisulfite")+" but your drawer has less — get more before brew day."});
-    else items.push({bad:false, text:"Dechlorination dose included above: "+(dose.kind==="campden" ? dose.tablets+" Campden tablet"+(dose.tablets===1?"":"s") : fmt(dose.mg)+" mg potassium metabisulfite")+" for "+fmt(S.start.chlorine,1)+" ppm "+S.start.chlorType+"."});
+  var items = notes ? notes.slice() : [];
+  if (treatment.status === "short" || treatment.status === "missing") {
+    items.push({bad:true, text:treatmentText(treatment)});
+  }
+  if (treatment.shortage > 0) {
+    items.push({bad:true, text:"Shopping list · " + ingById(treatment.id).name + " · " +
+      fmt(treatment.shortage, 3) + " " + treatment.unit});
   }
   for (const shortage of shortfalls(S, INGREDIENTS)) {
     const g = ingById(shortage.id);
     const amount = g.id === "distilled" ? volLabel(shortage.amount) : fmt(shortage.amount, 3) + " " + g.unit;
     items.push({bad:true, text:"Shopping list · " + g.name + " · " + amount});
   }
-  var allIn = IONS.every(function(ion){ var t=S.target[ion.id]; return fin[ion.id]>=t.min && fin[ion.id]<=t.max; });
+  var allIn = IONS.every(function(ion){ var t=S.target[ion.id]; return fin[ion.id] !== null && fin[ion.id]>=t.min && fin[ion.id]<=t.max; });
   if (allIn && !items.some(function(n){return n.bad;})) items.push({bad:false, text:"Every ion is inside its target range."});
   $("finalNotes").innerHTML = items.map(function(n){
     return '<li class="'+(n.bad?"":"good")+'">'+esc(n.text)+'</li>';
@@ -509,8 +493,11 @@ function bind(){
     if (ion){ pushUndo(true); S.start.assumed = false; S.start[ion] = e.target.value === "" ? null : Math.max(0, Number(e.target.value)); S.startName = "Custom"; $("startNameTag").textContent = "Custom"; saveLS(); updateStartTiles(); renderTarget(); renderFinal(); return; }
     if (e.target.id === "start-pH"){ pushUndo(true); S.start.assumed = false; S.start.pH = e.target.value === "" ? null : Math.min(10, Math.max(3, Number(e.target.value))); saveLS(); renderFinal(); }
   });
-  $("chlorPpm").addEventListener("change", function(){ pushUndo(false); S.start.chlorine = Math.max(0, parseFloat(this.value)||0); saveLS(); renderAdds(); renderFinal(); });
-  $("chlorType").addEventListener("change", function(){ pushUndo(false); S.start.chlorType = this.value; saveLS(); renderAdds(); renderFinal(); });
+  $("chlorPpm").addEventListener("change", function(){ pushUndo(false); S.start.chlorine = this.value === "" ? null : Math.max(0, Number(this.value)); saveLS(); refreshComputed(); });
+  $("chlorType").addEventListener("change", function(){ pushUndo(false); S.start.chlorType = this.value; saveLS(); renderStart(); refreshComputed(); });
+  $("chlorBasis").addEventListener("change", function(){
+    pushUndo(false); S.start.chlorBasis = this.value || null; saveLS(); refreshComputed();
+  });
   $("saveStartBtn").addEventListener("click", function(){
     var name = $("saveStartName").value.trim();
     if (!name){ toast("Give the profile a name first"); return; }
@@ -528,7 +515,7 @@ function bind(){
     var del = e.target.getAttribute("data-del-start");
     if (apply !== null && apply !== undefined){
       pushUndo(false);
-      if (apply === "-1"){ S.start = {Ca:0,Mg:0,Na:0,SO4:0,Cl:0,Alk:0,pH:7,assumed:true,chlorine:0,chlorType:"none"}; S.startName = "Distilled"; }
+      if (apply === "-1"){ S.start = {Ca:0,Mg:0,Na:0,SO4:0,Cl:0,Alk:0,pH:7,assumed:true,chlorine:0,chlorType:"none",chlorBasis:"Cl2"}; S.startName = "Distilled"; }
       else { var p = S.savedStarts.find(p => p.id === apply); if (!p) return; S.start = JSON.parse(JSON.stringify(p.profile)); S.startName = p.name; }
       saveLS(); renderAll();
     }
@@ -644,6 +631,8 @@ function bind(){
     row.querySelector("[data-amt]").value = id === "distilled" ? toVolumeDisplay(amount, S.unit) : amount;
     row.querySelector("[data-stock-warning]").hidden = rawDose(input, id) <= stockCap(g);
     input.style.background = sliderBG(amount / sliderMax(g), Math.min(1, stockCap(g) / sliderMax(g)));
+    const treatment = list.querySelector("[data-treatment]");
+    if (treatment) treatment.textContent = treatmentText(dechlorination(S, sourceVolume()));
     updateStartTiles(); renderTarget(); renderFinal();
   });
   function configPreviewDose(g, amount) {
@@ -674,13 +663,16 @@ function bind(){
       pushUndo(false); S.enabled[input.dataset.enable] = input.checked; saveLS(); refreshComputed();
     }
     if (input.hasAttribute("data-dechlor-enabled")) {
-      pushUndo(false); S.dechlor.enabled = input.checked; saveLS(); renderFinal();
+      pushUndo(false); S.dechlor.enabled = input.checked; saveLS(); refreshComputed();
     }
-    if (input.hasAttribute("data-dechlor-rate")) {
-      pushUndo(false); S.dechlor.rateMgGal = Math.max(5, Number(input.value) || 30); saveLS(); renderAdds(); renderFinal();
+    if (input.hasAttribute("data-dechlor-formulation")) {
+      if (input.value !== "" && !input.validity.valid) { renderAdds(); toast("Enter a valid formulation."); return; }
+      pushUndo(false);
+      S.dechlor[S.dechlor.mode === "campden" ? "campdenMg" : "assayPercent"] = input.value === "" ? null : Number(input.value);
+      saveLS(); refreshComputed();
     }
     if (input.hasAttribute("data-dechlor-mode")) {
-      pushUndo(false); S.dechlor.mode = input.value; saveLS(); renderAdds(); renderFinal();
+      pushUndo(false); S.dechlor.mode = input.value; saveLS(); refreshComputed();
     }
   });
 

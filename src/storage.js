@@ -2,7 +2,7 @@ import { alkAsCaCO3, gallonsToLiters } from './units.js';
 
 export const LEGACY_KEY = 'wcStaticV1';
 export const STORAGE_KEY = 'wcStaticV2';
-export const VERSION = 5;
+export const VERSION = 6;
 
 export const newId = () => crypto.randomUUID();
 
@@ -16,7 +16,7 @@ const targetKeys = profileKeys;
 function validProfile(value) {
   return object(value) && profileKeys.every(key => nullable(value[key], quantity)) &&
     typeof value.assumed === 'boolean' && nullable(value.pH, n => quantity(n) && n <= 14) && nullable(value.chlorine, quantity) &&
-    ['none', 'chlorine', 'chloramine'].includes(value.chlorType);
+    ['none', 'chlorine', 'chloramine'].includes(value.chlorType) && ['Cl2', 'compound', null].includes(value.chlorBasis);
 }
 
 function validTarget(value) {
@@ -48,7 +48,9 @@ function validate(state, defaults) {
       object(state.drawer[key]) && quantity(state.drawer[key].stock) &&
       typeof state.drawer[key].owned === 'boolean' && typeof state.drawer[key].unlimited === 'boolean') &&
     object(state.dechlor) && ['kmeta', 'campden'].includes(state.dechlor.mode) &&
-    quantity(state.dechlor.rateMgGal) && typeof state.dechlor.enabled === 'boolean')) {
+    nullable(state.dechlor.rateMgGal, quantity) && typeof state.dechlor.enabled === 'boolean' &&
+    nullable(state.dechlor.assayPercent, n => Number.isFinite(n) && n > 0 && n <= 100) &&
+    nullable(state.dechlor.campdenMg, n => Number.isFinite(n) && n > 0))) {
     throw new Error('The backup contains invalid calculator data.');
   }
   return state;
@@ -60,7 +62,8 @@ function legacyProfile(value) {
     pH: value.pH ?? null,
     assumed: value.assumed ?? false,
     chlorine: value.chlorine ?? null,
-    chlorType: value.chlorType ?? 'none'
+    chlorType: value.chlorType ?? 'none',
+    chlorBasis: 'Cl2'
   };
 }
 
@@ -144,16 +147,21 @@ export function encodeBackup(state) {
 
 export function decodeBackup(raw, defaults) {
   const record = JSON.parse(raw);
-  if (!object(record) || ![2, 3, 4, VERSION].includes(record.version)) throw new Error('This backup version is unsupported.');
+  if (!object(record) || ![2, 3, 4, 5, VERSION].includes(record.version)) throw new Error('This backup version is unsupported.');
   if (record.version === VERSION) return validate(record.data, defaults);
   const state = record.version === 2 ? convertVolumes(record.data) : record.data;
-  const converted = {
+  const converted = record.version === 5 ? state : {
     ...state,
     start: { ...legacyProfile(state.start), assumed: state.startName === 'Distilled' },
     target: legacyTarget(state.target),
     savedStarts: state.savedStarts.map(entry => ({ ...entry, profile: legacyProfile(entry.profile) })),
     customPresets: state.customPresets.map(entry => ({ ...entry, target: legacyTarget(entry.target) }))
   };
+  if (record.version === 5) {
+    converted.start.chlorBasis = 'Cl2';
+    for (const saved of converted.savedStarts) saved.profile.chlorBasis = 'Cl2';
+  }
+  converted.dechlor = { ...defaults.dechlor, ...converted.dechlor };
   return validate(convertForms(converted, defaults), defaults);
 }
 

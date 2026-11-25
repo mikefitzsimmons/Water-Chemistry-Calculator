@@ -4,6 +4,7 @@ import { seedLegacy } from '../fixtures/legacy.js';
 test('Calculate excludes stale disabled gypsum and dilution', async ({ page, context, baseURL }) => {
   await seedLegacy(context, baseURL);
   await page.goto('/');
+  await page.locator('[data-dechlor-enabled]').uncheck();
   await page.locator('[data-enable="gypsum"]').uncheck();
   await page.locator('[data-enable="epsom"]').uncheck();
   const chloride = page.locator('[data-enable="mgcl2"]');

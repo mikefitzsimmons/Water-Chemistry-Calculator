@@ -314,8 +314,8 @@
           <h3>Chlorine / chloramine</h3>
           <div class="rowflex">
             <div class="field">
-              <label class="lbl" for="chlorPpm">Level (ppm)</label>
-              <input type="number" id="chlorPpm" min="0" max="10" step="0.1" />
+              <label class="lbl" for="chlorPpm">Residual (mg/L)</label>
+              <input type="number" id="chlorPpm" min="0" step="any" />
             </div>
             <div class="field">
               <label class="lbl" for="chlorType">Disinfectant</label>
@@ -325,9 +325,15 @@
                 <option value="chloramine">Chloramine</option>
               </select>
             </div>
+            <div class="field">
+              <label class="lbl" for="chlorBasis">Reporting basis</label>
+              <select id="chlorBasis">
+                <option value="">Unknown</option>
+                <option value="Cl2">As Cl₂</option>
+                <option value="compound">As reported compound</option>
+              </select>
+            </div>
           </div>
-          <p class="small">If your water is disinfected, set the level here. The dechlorination dose
-            (potassium metabisulfite or Campden tablets) is worked out automatically in Additions.</p>
           <hr class="divider" />
           <h3>Saved starting profiles</h3>
           <div class="rowflex">
