@@ -100,6 +100,14 @@ function convertForms(state, defaults) {
   return state;
 }
 
+function legacyDrawer(defaults) {
+  const owned = new Set(['gypsum', 'cacl2-dihydrate', 'epsom', 'nacl', 'nahco3', 'lactic', 'distilled']);
+  const legacyStock = { campden: 24, kmeta: 50000, distilled: gallonsToLiters(100) };
+  return Object.fromEntries(Object.keys(defaults.drawer).map(id => [
+    id, { owned: owned.has(id), unlimited: owned.has(id), stock: legacyStock[id] ?? 100 }
+  ]));
+}
+
 export function migrateLegacy(record, defaults) {
   if (!object(record)) throw new Error('The prototype save is invalid.');
   record = convertVolumes(record);
@@ -108,7 +116,7 @@ export function migrateLegacy(record, defaults) {
     ...record,
     adds: { ...defaults.adds, ...record.adds },
     enabled: { ...defaults.enabled, ...record.enabled },
-    drawer: { ...structuredClone(defaults.drawer), ...structuredClone(record.drawer ?? {}) },
+    drawer: { ...legacyDrawer(defaults), ...structuredClone(record.drawer ?? {}) },
     dechlor: { ...defaults.dechlor, ...record.dechlor },
     start: record.start ? legacyProfile(record.start) : structuredClone(defaults.start),
     target: record.target ? legacyTarget(record.target) : structuredClone(defaults.target),

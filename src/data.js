@@ -51,13 +51,7 @@ export function presetById(id){ for (var i=0;i<PRESETS.length;i++) if (PRESETS[i
 
 /* ================= state ================= */
 function defaultDrawer(){
-  var d = {};
-  var owned = {gypsum:1, "cacl2-dihydrate":1, epsom:1, nacl:1, nahco3:1, lactic:1, distilled:1};
-  INGREDIENTS.forEach(function(g){
-    d[g.id] = {owned: !!owned[g.id], unlimited: !!owned[g.id], stock: 100};
-  });
-  d.campden.stock = 24; d.kmeta.stock = 50000;
-  return d;
+  return Object.fromEntries(INGREDIENTS.map(g => [g.id, { owned:true, unlimited:true, stock:0 }]));
 }
 export function defaultState(){
   var p = presetById("pale-ale");

@@ -3,6 +3,7 @@ import { decodeBackup, encodeBackup, newId, readSave, writeSave } from './storag
 import { gallonsToLiters, litersToGallons, fromVolumeDisplay, toVolumeDisplay, alkAsCaCO3 } from './units.js';
 import { INGREDIENTS, ingredientById as ingById } from './catalog.js';
 import { evaluate, effectiveDose, mixVolumes } from './evaluate.js';
+import { stockCap as availableStock, doseMaximum, doseGrid, snapDose, shortfalls } from './inventory.js';
 import { IONS, ionById, PRESETS, presetById, defaultState } from './data.js';
 
 const getStorage = () => window.localStorage;
@@ -48,12 +49,6 @@ function $(id){ return document.getElementById(id); }
 function esc(s){ return String(s).replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
 function fmt(n, dp){ if (!Number.isFinite(n)) return "—"; return Number(n.toFixed(dp===undefined?0:dp)).toString(); }
 function volLabel(liters){ return fmt(toVolumeDisplay(liters, S.unit), 2) + " " + S.unit; }
-function snapAmt(v, unit){
-  if (unit==="g") { var st = S.scaleStep; return Math.round(v/st)*st; }
-  if (unit==="mL") return Math.round(v*10)/10;
-  if (unit==="tablets") return Math.ceil(v);
-  return Math.round(v*20)/20;
-}
 var toastTimer = null;
 function toast(msg){
   var t = $("toast"); t.textContent = msg; t.classList.add("show");
@@ -66,16 +61,8 @@ function residualAlk(profile){
 function sourceVolume(){ return mixVolumes(S).sourceL; }
 
 /* stock caps, expressed in each ingredient's own unit */
-function stockCap(g){
-  var d = S.drawer[g.id];
-  if (!d || !d.owned) return 0;
-  if (d.unlimited) return Infinity;
-  return Math.max(0, d.stock||0);
-}
-function sliderMax(g){
-  if (g.auto) return 0;
-  return g.maxPerGal * litersToGallons(S.batchL);
-}
+function stockCap(g){ return availableStock(S, g.id); }
+function sliderMax(g){ return doseMaximum(S, g); }
 
 /* ================= chemistry ================= */
 function computeFinal(){
@@ -246,19 +233,13 @@ function renderAdds(){
   INGREDIENTS.forEach(function(g){
     if (g.auto || g.inventoryOnly) return;
     var d = S.drawer[g.id];
-    if (!d || !d.owned){
-      html += '<div class="addrow disabled"><div class="ahead">'+
-        '<span class="aname">'+esc(g.name)+'</span>'+
-        '<span class="anote">'+esc(g.sub)+'</span></div>'+
-        '<p class="anote" style="margin:6px 0 0">Not in your Ingredient Drawer — open the drawer and tick it to dose with it.</p></div>';
-      return;
-    }
+    if (!d?.owned && !(S.enabled[g.id] && S.adds[g.id] > 0)){ return; }
     anyOwned = true;
     var max = sliderMax(g), amt = S.adds[g.id]||0;
     var cap = stockCap(g);
     var stockFrac = (cap===Infinity || max<=0) ? 1 : Math.max(0, Math.min(1, cap/max));
     var en = S.enabled[g.id];
-    var step = g.unit==="g" ? Math.max(g.step, S.scaleStep) : g.step;
+    var step = doseGrid(S, g).step;
     html += '<div class="addrow'+(en?"":" disabled")+'" data-addrow="'+g.id+'"><div class="ahead">'+
       '<label class="check"><input type="checkbox" data-enable="'+g.id+'" '+(en?"checked":"")+' aria-label="Enable '+esc(g.name)+'">'+
       '<span class="aname">'+esc(g.name)+'</span></label>'+
@@ -268,18 +249,13 @@ function renderAdds(){
       '<input type="range" min="0" max="'+fmt(max,2)+'" step="'+step+'" value="'+amt+'" data-slider="'+g.id+'" '+(en?"":"disabled")+
         ' style="background:'+sliderBG(max>0?amt/max:0, stockFrac)+'" aria-label="'+esc(g.name)+' slider">'+
       '<div class="ends"><span>0</span><span>'+(cap===Infinity ? 'on hand: unlimited' : 'on hand: '+fmt(cap, g.unit==="g"?1:0)+' '+g.unit)+' · max '+fmt(max,1)+' '+g.unit+'</span></div>'+
-      (cap!==Infinity && amt > cap ? '<p class="warn">That’s more than the '+fmt(cap,1)+' '+g.unit+' in your drawer — the solver will cap it there.</p>' : '')+
+      '<p class="warn" data-stock-warning '+(en && amt > cap ? '' : 'hidden')+'>This amount exceeds your stock.</p>'+
     '</div>';
   });
   /* distilled water row */
   (function(){
     var g = ingById("distilled"), d = S.drawer.distilled;
-    if (!d || !d.owned){
-      html += '<div class="addrow disabled"><div class="ahead"><span class="aname">Distilled Water</span>'+
-        '<span class="anote">dilutes the starting water</span></div>'+
-        '<p class="anote" style="margin:6px 0 0">Not in your Ingredient Drawer — open the drawer and tick it to dilute with it.</p></div>';
-      return;
-    }
+    if (!d?.owned && !(S.enabled.distilled && S.adds.distilled > 0)){ return; }
     anyOwned = true;
     var amtGal = S.adds.distilled||0;
     var dispAmt = toVolumeDisplay(amtGal, S.unit);
@@ -287,23 +263,22 @@ function renderAdds(){
     var capGal = stockCap(g);
     var stockFrac = capGal===Infinity ? 1 : Math.max(0, Math.min(1, capGal/S.batchL));
     var en = S.enabled.distilled;
-    html += '<div class="addrow'+(en?"":" disabled")+'"><div class="ahead">'+
+    html += '<div class="addrow'+(en?"":" disabled")+'" data-addrow="distilled"><div class="ahead">'+
       '<label class="check"><input type="checkbox" data-enable="distilled" '+(en?"checked":"")+'><span class="aname">Distilled Water</span></label>'+
       '<span class="anote">dilutes the starting water; starting amount fills in automatically</span>'+
       '<span class="aamt"><input type="number" min="0" step="0.25" value="'+fmt(dispAmt,2)+'" data-amt="distilled" '+(en?"":"disabled")+' aria-label="Distilled water amount">'+
       '<span class="u">'+(S.unit==="gal"?"gal":"L")+'</span></span></div>'+
-      '<input type="range" min="0" max="'+fmt(maxDisp,2)+'" step="'+(S.unit==="gal"?0.25:0.5)+'" value="'+fmt(dispAmt,2)+'" data-slider="distilled" '+(en?"":"disabled")+
+      '<input type="range" min="0" max="'+maxDisp+'" step="any" value="'+fmt(dispAmt,2)+'" data-slider="distilled" '+(en?"":"disabled")+
         ' style="background:'+sliderBG(S.batchL>0?amtGal/S.batchL:0, stockFrac)+'" aria-label="Distilled water slider">'+
       '<div class="ends"><span>0</span><span>starting water: '+volLabel(sourceVolume())+' · distilled: '+volLabel(amtGal)+'</span></div>'+
-      (capGal!==Infinity && amtGal > capGal ? '<p class="warn">That’s more distilled water than the '+volLabel(capGal)+' in your drawer.</p>' : '')+
+      '<p class="warn" data-stock-warning '+(en && amtGal > capGal ? '' : 'hidden')+'>This amount exceeds your stock.</p>'+
     '</div>';
   })();
   if (!anyOwned){
     html += '<p class="small">Nothing is in your Ingredient Drawer yet. Open it and tick what you own — salts, acids and distilled water — and they’ll appear here as sliders.</p>';
   }
   $("addsList").innerHTML = html;
-  var count = 0;
-  INGREDIENTS.forEach(function(g){ if (S.drawer[g.id] && S.drawer[g.id].owned) count++; });
+  const count = INGREDIENTS.filter(g => S.drawer[g.id]?.owned).length;
   $("drawerCount").textContent = count;
 }
 
@@ -335,6 +310,11 @@ function renderFinal(fin, notes){
     else if (cap < need) items.push({bad:true, text:"Dechlorination needs "+(dose.kind==="campden" ? dose.tablets+" Campden tablets" : fmt(dose.mg)+" mg potassium metabisulfite")+" but your drawer has less — get more before brew day."});
     else items.push({bad:false, text:"Dechlorination dose included above: "+(dose.kind==="campden" ? dose.tablets+" Campden tablet"+(dose.tablets===1?"":"s") : fmt(dose.mg)+" mg potassium metabisulfite")+" for "+fmt(S.start.chlorine,1)+" ppm "+S.start.chlorType+"."});
   }
+  for (const shortage of shortfalls(S, INGREDIENTS)) {
+    const g = ingById(shortage.id);
+    const amount = g.id === "distilled" ? volLabel(shortage.amount) : fmt(shortage.amount, 3) + " " + g.unit;
+    items.push({bad:true, text:"Shopping list · " + g.name + " · " + amount});
+  }
   var allIn = IONS.every(function(ion){ var t=S.target[ion.id]; return fin[ion.id]>=t.min && fin[ion.id]<=t.max; });
   if (allIn && !items.some(function(n){return n.bad;})) items.push({bad:false, text:"Every ion is inside its target range."});
   $("finalNotes").innerHTML = items.map(function(n){
@@ -347,7 +327,7 @@ function renderDrawer(){
   var html = "";
   INGREDIENTS.forEach(function(g){
     var d = S.drawer[g.id];
-    var unitLabel = g.id==="distilled" ? "gal" : g.unit;
+    var unitLabel = g.id==="distilled" ? S.unit : g.unit;
     html += '<div class="drow"><div class="dhead">'+
       '<label class="check"><input type="checkbox" data-d-owned="'+g.id+'" '+(d.owned?"checked":"")+'><span class="dname">'+esc(g.name)+'</span></label>'+
       '<span class="anote">'+esc(g.sub)+'</span></div>'+
@@ -399,7 +379,7 @@ function solve(){
   INGREDIENTS.forEach(g => {
     if (!S.enabled[g.id] || !g.mass && g.id !== "distilled") return;
     const bound = vars.find(v => v.id === g.id)?.max ?? 0;
-    S.adds[g.id] = Math.min(S.adds[g.id], bound);
+    S.adds[g.id] = snapDose(S, g, Math.min(S.adds[g.id], bound));
   });
   function cur(){ return objective(computeFinal()); }
   var best = cur();
@@ -422,12 +402,7 @@ function solve(){
       }
     });
   });
-  /* snap to measurable increments */
-  vars.forEach(function(v){
-    var g = ingById(v.id);
-    var snapped = v.id==="distilled" ? (S.adds[v.id] >= S.batchL - 1e-9 ? S.batchL : Math.round(S.adds[v.id]/gallonsToLiters(0.25))*gallonsToLiters(0.25)) : snapAmt(S.adds[v.id]||0, g.unit);
-    S.adds[v.id] = Math.max(0, Math.min(isFinite(v.max)?v.max:snapped, snapped));
-  });
+  vars.forEach(v => { S.adds[v.id] = snapDose(S, ingById(v.id), S.adds[v.id]); });
   /* shortfall notes: would more of a capped ingredient help? */
   var notes = [], fin = computeFinal();
   vars.forEach(function(v){
@@ -458,12 +433,16 @@ function solve(){
 function openDrawer(){
   renderDrawer();
   $("drawer").classList.add("open"); $("backdrop").classList.add("open");
+  document.querySelector(".wrap").inert = true;
+  $("drawer").inert = false;
   $("drawer").setAttribute("aria-hidden","false");
   $("closeDrawerBtn").focus();
 }
 function closeDrawer(){
   $("drawer").classList.remove("open"); $("backdrop").classList.remove("open");
   $("drawer").setAttribute("aria-hidden","true");
+  $("drawer").inert = true;
+  document.querySelector(".wrap").inert = false;
   renderAdds(); renderFinal();
   $("openDrawerBtn").focus();
 }
@@ -496,6 +475,12 @@ async function importBackup(event){
 }
 
 /* ================= events ================= */
+function keepDrawerFocus(input) {
+  const attribute = [...input.attributes].find(a => a.name.startsWith("data-d-"));
+  renderDrawer();
+  if (attribute) $("drawerBody").querySelector("[" + attribute.name + '="' + attribute.value + '"]')?.focus();
+}
+
 function bind(){
   $("undoBtn").addEventListener("click", undo);
   document.addEventListener("keydown", function(e){
@@ -504,7 +489,16 @@ function bind(){
       if (tag === "TEXTAREA") return;
       e.preventDefault(); undo();
     }
-    if (e.key === "Escape" && $("drawer").classList.contains("open")) closeDrawer();
+    if (!$("drawer").classList.contains("open")) return;
+    if (e.key === "Escape") closeDrawer();
+    if (e.key === "Tab") {
+      const controls = [...$("drawer").querySelectorAll("button:not(:disabled), input:not(:disabled), select:not(:disabled)")];
+      if (e.shiftKey && document.activeElement === controls[0]) {
+        e.preventDefault(); controls.at(-1).focus();
+      } else if (!e.shiftKey && document.activeElement === controls.at(-1)) {
+        e.preventDefault(); controls[0].focus();
+      }
+    }
   });
   $("exportBtn").addEventListener("click", exportBackup);
   $("importBtn").addEventListener("click", () => $("backupInput").click());
@@ -513,6 +507,14 @@ function bind(){
   $("openDrawerBtn").addEventListener("click", openDrawer);
   $("closeDrawerBtn").addEventListener("click", closeDrawer);
   $("doneDrawerBtn").addEventListener("click", closeDrawer);
+  $("deselectAll").addEventListener("click", () => {
+    pushUndo(false);
+    for (const item of Object.values(S.drawer)) {
+      item.owned = false;
+      item.unlimited = false;
+    }
+    saveLS(); renderDrawer(); refreshComputed();
+  });
   $("backdrop").addEventListener("click", closeDrawer);
 
   $("batchInput").addEventListener("change", function(){
@@ -650,51 +652,69 @@ function bind(){
   });
 
   /* additions */
-  $("addsList").addEventListener("input", function(e){
-    var t = e.target, id;
-    if ((id = t.getAttribute("data-slider"))){
-      pushUndo(true);
-      var raw = parseFloat(t.value)||0;
-      if (id === "distilled"){ S.adds.distilled = fromVolumeDisplay(raw, S.unit); }
-      else S.adds[id] = snapAmt(raw, ingById(id).unit);
-      saveLS();
-      /* update this row in place; full render on change (drag end) */
-      var row = t.closest(".addrow");
-      if (row){
-        var num = row.querySelector('[data-amt="'+id+'"]');
-        if (num) num.value = id==="distilled" ? fmt(parseFloat(t.value)||0, 2) : fmt(S.adds[id], ingById(id).unit==="g"?2:1);
-        if (id === "distilled"){
-          t.style.background = sliderBG(S.batchL>0 ? S.adds.distilled/S.batchL : 0,
-            stockCap(ingById("distilled"))===Infinity ? 1 : Math.max(0, Math.min(1, stockCap(ingById("distilled"))/S.batchL)));
-        } else {
-          var gg = ingById(id), mx = sliderMax(gg), cp = stockCap(gg);
-          t.style.background = sliderBG(mx>0 ? S.adds[id]/mx : 0, cp===Infinity ? 1 : Math.max(0, Math.min(1, cp/mx)));
-        }
-      }
-      updateStartTiles(); renderTarget(); renderFinal();
-    }
-    if (t.hasAttribute("data-dechlor-enabled")){ pushUndo(false); S.dechlor.enabled = t.checked; saveLS(); renderFinal(); }
-    if (t.hasAttribute("data-dechlor-rate")){ pushUndo(true); S.dechlor.rateMgGal = Math.max(5, parseFloat(t.value)||30); saveLS(); renderAdds(); renderFinal(); }
+  let preview;
+  const list = $("addsList");
+  function rawDose(input, id) {
+    const value = Math.max(0, Number(input.value));
+    return id === "distilled" ? fromVolumeDisplay(value, S.unit) : value;
+  }
+  list.addEventListener("input", event => {
+    const input = event.target;
+    const id = input.dataset.slider;
+    if (!id) return;
+    const g = ingById(id);
+    if (!preview) preview = { id, original: S.adds[id] };
+    const amount = configPreviewDose(g, rawDose(input, id));
+    S.adds[id] = amount;
+    const row = input.closest(".addrow");
+    row.querySelector("[data-amt]").value = id === "distilled" ? toVolumeDisplay(amount, S.unit) : amount;
+    row.querySelector("[data-stock-warning]").hidden = rawDose(input, id) <= stockCap(g);
+    input.style.background = sliderBG(amount / sliderMax(g), Math.min(1, stockCap(g) / sliderMax(g)));
+    updateStartTiles(); renderTarget(); renderFinal();
   });
-  $("addsList").addEventListener("change", function(e){
-    var t = e.target, id;
-    if (t.hasAttribute("data-slider")){ renderAdds(); updateStartTiles(); renderTarget(); renderFinal(); return; }
-    if ((id = t.getAttribute("data-amt"))){
-      pushUndo(false);
-      var raw = Math.max(0, parseFloat(t.value)||0);
-      if (id === "distilled"){ S.adds.distilled = fromVolumeDisplay(raw, S.unit); }
-      else S.adds[id] = snapAmt(raw, ingById(id).unit);
-      saveLS(); renderAdds(); updateStartTiles(); renderTarget(); renderFinal();
+  function configPreviewDose(g, amount) {
+    return snapDose(S, g, amount, Infinity);
+  }
+  list.addEventListener("pointercancel", () => {
+    if (!preview) return;
+    S.adds[preview.id] = preview.original;
+    preview = undefined;
+    refreshComputed();
+  });
+  list.addEventListener("change", event => {
+    const input = event.target;
+    const id = input.dataset.slider || input.dataset.amt;
+    if (id) {
+      if (preview) S.adds[preview.id] = preview.original;
+      preview = undefined;
+      const next = snapDose(S, ingById(id), rawDose(input, id));
+      if (next !== S.adds[id]) {
+        pushUndo(false);
+        S.adds[id] = next;
+        saveLS();
+      }
+      refreshComputed();
+      list.querySelector(input.hasAttribute("data-slider") ? '[data-slider="' + id + '"]' : '[data-amt="' + id + '"]')?.focus();
     }
-    if ((id = t.getAttribute("data-enable"))){ pushUndo(false); S.enabled[id] = t.checked; saveLS(); renderAdds(); renderFinal(); }
-    if (t.hasAttribute("data-dechlor-mode")){ pushUndo(false); S.dechlor.mode = t.value; saveLS(); renderAdds(); renderFinal(); }
+    if (input.dataset.enable) {
+      pushUndo(false); S.enabled[input.dataset.enable] = input.checked; saveLS(); refreshComputed();
+    }
+    if (input.hasAttribute("data-dechlor-enabled")) {
+      pushUndo(false); S.dechlor.enabled = input.checked; saveLS(); renderFinal();
+    }
+    if (input.hasAttribute("data-dechlor-rate")) {
+      pushUndo(false); S.dechlor.rateMgGal = Math.max(5, Number(input.value) || 30); saveLS(); renderAdds(); renderFinal();
+    }
+    if (input.hasAttribute("data-dechlor-mode")) {
+      pushUndo(false); S.dechlor.mode = input.value; saveLS(); renderAdds(); renderFinal();
+    }
   });
 
   /* drawer */
   $("drawerBody").addEventListener("change", function(e){
     var t = e.target, id;
-    if ((id = t.getAttribute("data-d-owned"))){ pushUndo(false); S.drawer[id].owned = t.checked; saveLS(); renderDrawer(); renderAdds(); renderFinal(); }
-    else if ((id = t.getAttribute("data-d-unlim"))){ pushUndo(false); S.drawer[id].unlimited = t.checked; saveLS(); renderDrawer(); renderAdds(); }
+    if ((id = t.getAttribute("data-d-owned"))){ pushUndo(false); S.drawer[id].owned = t.checked; saveLS(); keepDrawerFocus(t); renderAdds(); renderFinal(); }
+    else if ((id = t.getAttribute("data-d-unlim"))){ pushUndo(false); S.drawer[id].unlimited = t.checked; saveLS(); keepDrawerFocus(t); renderAdds(); }
     else if ((id = t.getAttribute("data-d-stock"))){ pushUndo(false); S.drawer[id].stock = id === "distilled" ? fromVolumeDisplay(Math.max(0, Number(t.value)||0), S.unit) : Math.max(0, Number(t.value)||0); saveLS(); renderAdds(); renderFinal(); }
   });
 }

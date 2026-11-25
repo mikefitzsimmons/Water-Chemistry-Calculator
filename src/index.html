@@ -410,7 +410,7 @@
     </div>
 
     <div class="backdrop" id="backdrop"></div>
-    <aside class="drawer" id="drawer" aria-label="Ingredient Drawer" aria-hidden="true">
+    <aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-label="Ingredient Drawer" aria-hidden="true" inert>
       <header>
         <div>
           <h2>Ingredient Drawer</h2>
@@ -419,6 +419,7 @@
         </div>
         <button type="button" class="xbtn" id="closeDrawerBtn" aria-label="Close drawer">✕</button>
       </header>
+      <button type="button" class="btn" id="deselectAll">Deselect all</button>
       <div class="body" id="drawerBody"></div>
       <footer>
         <button type="button" class="btn primary big" id="doneDrawerBtn">Done</button>
