@@ -129,3 +129,40 @@ Use `npm test` for pure calculation, solver, unit conversion, state, and storage
 | Phone and keyboard | Complete the core workflow in desktop and phone viewports. Check slider keyboard and touch input, visible focus, drawer focus containment and return, Escape and backdrop dismissal, and readable range and shortage feedback. |
 
 Record the commands that passed, the browsers and viewport coverage, the reference fixtures and tolerances used for chemistry, and any verification gaps in the final handoff.
+
+## Continuation plan
+
+### 1. Make water reports easier to enter
+
+- Put the basis selector next to the alkalinity value and group them as one field. Label its choices **Alkalinity as CaCO₃** and **Bicarbonate as HCO₃⁻**. Use **Water report** as the blank starting profile for entering measurements in any order.
+- Add one short hint above the fields. “For dilute water, 1 ppm is approximately 1 mg/L. Enter the same number using the reporting basis on your report. Leave values that are missing blank.” Keep the unit hint separate from the disinfectant and alkalinity basis controls. [USGS concentration conversions](https://pubs.usgs.gov/circ/2003/circ1262/htdocs/conversions.html)
+- Put a short explanation by alkalinity that **Total Hardness (as CaCO₃)** measures combined hardness, chiefly from calcium and magnesium. Leave calcium and alkalinity blank when the report gives only total hardness. The same CaCO₃ reporting unit can appear on both tests. [USGS hardness and alkalinity definitions](https://water.usgs.gov/nwc/NWC/water_quality/tables/quality.abs.html)
+- Use **Sulfate (SO₄²⁻)** and **Chloride (Cl⁻)** consistently in Starting Water, target ranges, and the calculated profile. Label disinfectant choices **As Cl₂ (chlorine equivalent)**, **As HOCl (hypochlorous acid)** for free chlorine, and **As NH₂Cl (chloramine)** for monochloramine. Preserve the distinction between chloride concentration and disinfectant residual. [EPA monochloramine reporting method](https://nepis.epa.gov/Exe/ZyPURL.cgi?Dockey=P1011454.TXT) · [EPA free chlorine reference](https://www.epa.gov/sites/production/files/2019-08/documents/sanitary_survey_learners_guide_508_8.27.19.pdf)
+
+Verify a report with mixed ordering, concentrations in ppm, a measured zero, and total hardness as the only CaCO₃ measurement. Check that switching the alkalinity basis preserves the underlying quantity and that the browser exposes the basis and its value as related controls.
+
+### 2. Simplify Additions and the Ingredient Drawer
+
+- Remove the routine ingredient checkboxes from Additions. A zero dose skips an ingredient in the current recipe, and Calculate may use any available ingredient that it can model. Use the drawer to exclude an ingredient from Calculate while retaining its recorded stock quantity. Keep an existing positive plan visible with its shortage when ownership or stock changes.
+- Migrate saved disabled doses to zero effective doses when removing the batch enablement flags. Verify that reloading or importing an older recipe preserves its treated profile and that Calculate respects the new availability rules.
+- Keep **Potassium metabisulfite powder** and **Campden tablets (potassium metabisulfite)** as separate ingredients. Use those names in the drawer and treatment control. Track powder in milligrams and tablets by count, and keep automatic tablet dosing tied to the potassium metabisulfite amount on the product label. A treated batch uses one dechlorination product at a time.
+- Add **Select all** and **Set selected to unlimited** alongside **Deselect all**. Select all marks every ingredient on hand using its recorded stock quantity and mode. Switching selected items to unlimited preserves their stored finite amounts. Each bulk action is a single Undo step.
+
+Verify that bulk edits preserve recipe doses and restore inventory with Undo and Redo. Test both dechlorination products and a legacy recipe with a disabled positive dose. Confirm that a new Calculate can replace a planned shortage with measurable on-hand doses.
+
+### 3. Add appearance and reference settings
+
+- Add a compact **Settings** control with **System**, **Light**, and **Dark** appearance choices. Default to System and remember explicit choices on reload.
+- Add **Show ingredient references**, off by default. Use a shared reference icon with a document and an external-link mark for the drawer, source, and preset references. Give every reference link a descriptive accessible name that includes “opens in a new tab.”
+
+Verify both explicit themes against the opposite system preference. Test visible focus and readable contrast in both themes and confirm the drawer’s tab order works with references hidden or shown.
+
+### 4. Explain stock suggestions by target
+
+- Keep each high or low measurement prominent and pair its color with text and an icon. Anchor an **ⓘ** button on the right of a warning when there are useful alternatives. Give it an accessible name such as **Ways to raise chloride**. Open the list inline with keyboard and touch support so it stays with the measurement on narrow screens. Use green for in-range results and neutral styling for optional adjustments. [W3C disclosure pattern](https://www.w3.org/WAI/ARIA/apg/patterns/disclosure/)
+- For each missed target, compare measurable recipes that relax one candidate ingredient’s stock limit at a time. Each trial uses the forward evaluator and the same batch volume, ingredient bounds, and other inventory limits. Label a candidate as bringing the measurement into range when the trial demonstrates that outcome and preserves targets that were already in range. Show the formulation, amount, projected result, and other measurable profile changes. Label partial improvements and combinations explicitly when they are the best results found. Run these trials in the worker with a shared search budget and discard their results when recipe inputs change.
+- Present preferred-value improvements below range warnings. When a range-feasible recipe has been found, use it to verify that the optional ingredient can be skipped and that adding it keeps the ranges met. Tie the copy to the measurement that improves. For example, “Epsom salt is optional. Magnesium is already in range. This would move it closer to your preferred value.”
+
+Use the five-gallon **Distilled → IPA** batch with only gypsum on hand as the main regression. Expect chloride at 0 mg/L against a minimum of 25 mg/L and the other ranges met. The chloride disclosure lists independently verified options, including table salt when the trial brings chloride into range without creating a sodium miss. Epsom salt can appear as an optional magnesium adjustment. Verify that an unevaluated goal and a target where extra inventory yields no improvement do not produce a range-closing purchase claim.
+
+Run `npm test` and `npm run test:browser` as each step lands. Cover desktop and phone layouts, keyboard and touch disclosures, light and dark appearance, storage migration, and backup round trips.
