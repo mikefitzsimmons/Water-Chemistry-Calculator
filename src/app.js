@@ -7,6 +7,7 @@ import { evaluate, mixVolumes, usesDilution } from './evaluate.js';
 import { stockCap as availableStock, doseMaximum, doseGrid, doseAt, doseIndex, snapDose, shortfalls } from './inventory.js';
 import { createHistory } from './history.js';
 import { IONS, STARTS, PRESETS, presetById, defaultState } from './data.js';
+import { targetAdvisories, targetLimits, validTargetRange } from './targets.js';
 
 const getStorage = () => window.localStorage;
 const loaded = readSave(getStorage, defaultState());
@@ -147,13 +148,17 @@ function renderTarget(){
   const ions = S.target.pH ? [...IONS, { id: "pH", name: "pH" }] : IONS;
   const headers = '<span></span><span class="lbl">Minimum</span><span class="lbl">Preferred</span><span class="lbl">Maximum</span>';
   $("targetRows").innerHTML = headers + ions.map(({ id, name }) => {
+    const { min, max } = targetLimits(id);
     const fields = Object.entries({ min: "minimum", ideal: "preferred", max: "maximum" }).map(([key, label]) =>
-      `<input type="number" step="any" ${id === "Alk" ? "" : 'min="0"'} ${id === "pH" ? 'max="14"' : ""}
+      `<input type="number" step="any" min="${min}" max="${max}"
         aria-label="${name} target ${label}" data-target-key="${id}" data-target-bound="${key}"
         value="${fmt(S.target[id][key], 5)}">`
     ).join("");
     return `<span class="target-label">${name}</span>` + fields;
   }).join("");
+  $("targetAdvisories").innerHTML = targetAdvisories(S.target).map(({ text, source }) =>
+    `<p>${esc(text)} <a href="${source}" target="_blank" rel="noopener">EPA reference</a></p>`
+  ).join("");
 }
 
 /* ================= rendering: additions ================= */
@@ -214,21 +219,23 @@ function renderAdds(){
     const cap = stockCap(g);
     const stockFraction = max > 0 ? Math.min(1, cap / max) : 1;
     const grid = doseGrid(S, g, Infinity);
-    const doseLabel = amountLabel(g, planned);
+    const doseLabel = dilution ? dilutionLabel(g, planned) : amountLabel(g, planned);
     const unit = dilution ? S.unit : g.unit;
     const displayed = dilution ? fmt(toVolumeDisplay(planned, S.unit), 6) : planned;
+    const entryStep = dilution ? toVolumeDisplay(grid.step, S.unit) : "any";
     html += `<div class="addrow${enabled ? "" : " disabled"}" data-addrow="${g.id}">
       <div class="ahead">
         <label class="check"><input type="checkbox" data-enable="${g.id}" ${enabled ? "checked" : ""} aria-label="Enable ${g.name}">
           <span class="aname">${g.name}</span></label>
         <span class="anote">${g.sub}</span>
-        <label class="aamt"><input type="number" min="0" step="any" value="${displayed}"
+        <label class="aamt"><input type="number" min="0" step="${entryStep}" value="${displayed}"
           data-amt="${g.id}" ${enabled ? "" : "disabled"} aria-label="${g.name} amount">
           <span class="u">${unit}</span></label>
       </div>
       <input type="range" min="0" max="${grid.last}" step="1" value="${doseIndex(grid, planned)}"
         data-slider="${g.id}" ${enabled && grid.last ? "" : "disabled"} aria-label="${g.name} slider"
         aria-valuetext="${esc(doseLabel)}" style="background:${sliderBG(max > 0 ? Math.min(1, planned / max) : 0, stockFraction)}">
+      ${dilution && S.unit === "gal" ? `<p class="small dilution-readout" data-dilution-readout ${doseLabel.includes("fl oz") ? "" : "hidden"}>${esc(doseLabel)}</p>` : ""}
       <div class="ends"><span>${cap === Infinity ? "Unlimited stock" : "On hand · " + esc(amountLabel(g, cap))}</span>
         <span>Batch maximum · ${amountLabel(g, max)}</span></div>
       <p class="warn" data-stock-warning ${enabled && planned - cap > 1e-9 ? "" : "hidden"}>This amount exceeds your stock.</p>
@@ -250,6 +257,20 @@ function amountLabel(g, amount) {
   return value + " " + unit;
 }
 
+function dilutionLabel(ingredient, amount) {
+  if (S.unit !== "gal") return amountLabel(ingredient, amount);
+  const ouncesPerGallon = 128;
+  const fluidOunces = toVolumeDisplay(amount, "gal") * ouncesPerGallon;
+  const rounded = Math.round(fluidOunces);
+  if (!Number.isSafeInteger(rounded) || Math.abs(fluidOunces - rounded) > 1e-7) {
+    return amountLabel(ingredient, amount);
+  }
+  const gallons = Math.floor(rounded / ouncesPerGallon);
+  const remainder = rounded % ouncesPerGallon;
+  if (!remainder) return gallons + " gal";
+  return (gallons ? gallons + " gal " : "") + remainder + " fl oz";
+}
+
 function diagnosticText(check) {
   if (check.difference === null || check.difference === 0) return check.status;
   const unit = check.key === "pH" ? "pH units" : "mg/L";
@@ -265,7 +286,8 @@ function renderFinal(state = S){
   var html = "";
   IONS.forEach(function(ion){
     var t = state.target[ion.id], v = fin[ion.id], ceil = ion.ceil;
-    var pct = function(x){ return Math.max(0, Math.min(100, x/ceil*100)); };
+    const floor = ion.id === "Alk" && (t.min < 0 || v < 0) ? targetLimits(ion.id).min : 0;
+    const pct = x => Math.max(0, Math.min(100, (x - floor) / (ceil - floor) * 100));
     const check = statusByKey.get(ion.id);
     const inR = check.status === "in range";
     html += '<div class="frow"><span class="fn">'+ion.name+'</span>'+
@@ -618,9 +640,14 @@ function bind(){
     if (!targetKey) return;
     const value = input.valueAsNumber;
     const range = { ...S.target[targetKey], [targetBound]: value };
-    if (!input.validity.valid || !Number.isFinite(value) || range.min > range.ideal || range.ideal > range.max) {
+    if (!input.validity.valid || !validTargetRange(targetKey, range)) {
       input.value = fmt(S.target[targetKey][targetBound], 5);
-      toast("Enter a valid range with minimum ≤ preferred ≤ maximum.");
+      const { min, max } = targetLimits(targetKey);
+      const name = IONS.find(ion => ion.id === targetKey)?.name ?? "pH";
+      const unit = targetKey === "pH" ? "" : " mg/L";
+      toast(value < min || value > max
+        ? name + " targets must be between " + min + " and " + max + unit + "."
+        : "Enter a valid range with minimum ≤ preferred ≤ maximum.");
       return;
     }
     if (value === S.target[targetKey][targetBound]) return;
@@ -654,7 +681,13 @@ function bind(){
     const view = { ...S, adds: { ...S.adds, [id]: amount } };
     const row = input.closest(".addrow");
     row.querySelector("[data-amt]").value = id === "distilled" ? fmt(toVolumeDisplay(amount, S.unit), 6) : amount;
-    input.setAttribute("aria-valuetext", amountLabel(g, amount));
+    const doseLabel = id === "distilled" ? dilutionLabel(g, amount) : amountLabel(g, amount);
+    input.setAttribute("aria-valuetext", doseLabel);
+    const readout = row.querySelector("[data-dilution-readout]");
+    if (readout) {
+      readout.textContent = doseLabel;
+      readout.hidden = !doseLabel.includes("fl oz");
+    }
     row.querySelector("[data-stock-warning]").hidden = amount - stockCap(g) <= 1e-9;
     input.style.background = sliderBG(amount / sliderMax(g), Math.min(1, stockCap(g) / sliderMax(g)));
     const treatment = list.querySelector("[data-treatment]");
@@ -681,7 +714,8 @@ function bind(){
       const focused = document.activeElement === input;
       const unchanged = input.dataset.slider &&
         input.valueAsNumber === doseIndex(doseGrid(S, g, Infinity), S.adds[id]);
-      if (!unchanged && input.validity.valid) {
+      const roundsToVolumeStep = id === "distilled" && input.validity.stepMismatch && input.valueAsNumber >= 0;
+      if (!unchanged && (input.validity.valid || roundsToVolumeStep)) {
         const next = snapDose(S, g, rawDose(input, g));
         if (next !== S.adds[id]) {
           S.adds[id] = next;

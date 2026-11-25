@@ -1,9 +1,10 @@
 import { PRESETS, STARTS } from './data.js';
+import { targetLimits, validTargetRange } from './targets.js';
 import { alkAsCaCO3, gallonsToLiters } from './units.js';
 
 export const LEGACY_KEY = 'wcStaticV1';
 export const STORAGE_KEY = 'wcStaticV2';
-export const VERSION = 7;
+export const VERSION = 8;
 
 export const newId = () => crypto.randomUUID();
 
@@ -13,6 +14,7 @@ const quantity = value => Number.isFinite(value) && value >= 0;
 const nullable = (value, valid) => value === null || valid(value);
 const profileKeys = ['Ca', 'Mg', 'Na', 'SO4', 'Cl', 'Alk'];
 const targetKeys = profileKeys;
+const targetFields = [...targetKeys, 'pH'];
 const sourceIds = new Set(STARTS.map(start => start.id));
 const targetIds = new Set([...PRESETS.map(preset => preset.id), '__customised']);
 
@@ -22,13 +24,12 @@ function validProfile(value) {
     ['none', 'chlorine', 'chloramine'].includes(value.chlorType) && ['Cl2', 'compound', null].includes(value.chlorBasis);
 }
 
-function validTarget(value) {
-  const keys = [...targetKeys, 'pH'];
-  return object(value) && Object.keys(value).every(key => keys.includes(key)) && keys.every(key => {
+function validTarget(value, bounded) {
+  return object(value) && Object.keys(value).every(key => targetFields.includes(key)) && targetFields.every(key => {
     if (key === 'pH' && value[key] === null) return true;
-    const r = value[key];
-    return object(r) && [r.min, r.ideal, r.max].every(key === 'Alk' ? Number.isFinite : quantity) &&
-      (key !== 'pH' || r.max <= 14) && r.min <= r.ideal && r.ideal <= r.max;
+    const limits = bounded || key === 'pH' ? targetLimits(key)
+      : { min: key === 'Alk' ? -Infinity : 0, max: Infinity };
+    return validTargetRange(key, value[key], limits);
   });
 }
 
@@ -38,15 +39,15 @@ function validRecords(records, valid) {
   ) && new Set(records.map(entry => entry.id)).size === records.length;
 }
 
-function validate(state, defaults) {
+function validate(state, defaults, bounded = true) {
   const keys = Object.keys(defaults.drawer);
   if (!(object(state) && ['gal', 'L'].includes(state.unit) && quantity(state.batchL) && state.batchL > 0 &&
     [0.01, 0.05, 0.1, 0.5, 1].includes(state.scaleStep) && text(state.startName) &&
     text(state.startId) && validProfile(state.start) &&
     (sourceIds.has(state.startId) ||
-      Array.isArray(state.savedStarts) && state.savedStarts.some(entry => 'saved:' + entry?.id === state.startId)) && text(state.targetPreset) && validTarget(state.target) &&
+      Array.isArray(state.savedStarts) && state.savedStarts.some(entry => 'saved:' + entry?.id === state.startId)) && text(state.targetPreset) && validTarget(state.target, bounded) &&
     validRecords(state.savedStarts, entry => validProfile(entry.profile)) &&
-    validRecords(state.customPresets, entry => validTarget(entry.target) && text(entry.blurb)) &&
+    validRecords(state.customPresets, entry => validTarget(entry.target, bounded) && text(entry.blurb)) &&
     (targetIds.has(state.targetPreset) ||
       state.customPresets.some(entry => 'custom:' + entry.id === state.targetPreset)) &&
     object(state.adds) && object(state.enabled) && object(state.drawer) &&
@@ -58,6 +59,19 @@ function validate(state, defaults) {
     nullable(state.dechlor.assayPercent, n => Number.isFinite(n) && n > 0 && n <= 100) &&
     nullable(state.dechlor.campdenMg, n => Number.isFinite(n) && n > 0))) {
     throw new Error('The backup contains invalid calculator data.');
+  }
+  return state;
+}
+
+function upgradeTargetLimits(state, defaults) {
+  validate(state, defaults, false);
+  for (const target of [state.target, ...state.customPresets.map(preset => preset.target)]) {
+    for (const key of targetKeys) {
+      const { min, max } = targetLimits(key);
+      const cap = value => Math.min(max, Math.max(min, value));
+      const range = target[key];
+      target[key] = { min: cap(range.min), ideal: cap(range.ideal), max: cap(range.max) };
+    }
   }
   return state;
 }
@@ -158,7 +172,7 @@ export function migrateLegacy(record, defaults) {
     state.targetPreset = '__customised';
   }
   if (record.drawer?.kmeta) state.drawer.kmeta.stock *= 1000;
-  return validate(convertSourceSelection(convertForms(state, defaults)), defaults);
+  return upgradeTargetLimits(convertSourceSelection(convertForms(state, defaults)), defaults);
 }
 
 export function encodeBackup(state) {
@@ -167,8 +181,9 @@ export function encodeBackup(state) {
 
 export function decodeBackup(raw, defaults) {
   const record = JSON.parse(raw);
-  if (!object(record) || ![2, 3, 4, 5, 6, VERSION].includes(record.version)) throw new Error('This backup version is unsupported.');
+  if (!object(record) || ![2, 3, 4, 5, 6, 7, VERSION].includes(record.version)) throw new Error('This backup version is unsupported.');
   if (record.version === VERSION) return validate(record.data, defaults);
+  if (record.version === 7) return upgradeTargetLimits(record.data, defaults);
   const state = record.version === 2 ? convertVolumes(record.data) : record.data;
   const converted = record.version >= 5 ? state : {
     ...state,
@@ -182,7 +197,7 @@ export function decodeBackup(raw, defaults) {
     for (const saved of converted.savedStarts) saved.profile.chlorBasis = 'Cl2';
   }
   converted.dechlor = { ...defaults.dechlor, ...converted.dechlor };
-  return validate(convertSourceSelection(convertForms(converted, defaults)), defaults);
+  return upgradeTargetLimits(convertSourceSelection(convertForms(converted, defaults)), defaults);
 }
 
 export function writeSave(getStorage, state) {

@@ -1,6 +1,13 @@
-import { litersToGallons } from './units.js';
+import { gallonsToLiters, litersToGallons } from './units.js';
 
 const EPSILON = 1e-9;
+const EIGHT_FLUID_OUNCES_L = gallonsToLiters(1 / 16);
+
+function regularDose(step, index) {
+  const amount = index * step;
+  // Keep gallon ticks on the same conversion as gallon stock entries.
+  return step === EIGHT_FLUID_OUNCES_L ? amount : Number(amount.toFixed(10));
+}
 
 export function stockCap(state, id) {
   const item = state.drawer[id];
@@ -13,15 +20,20 @@ export function doseMaximum(state, ingredient) {
 
 export function doseGrid(state, ingredient, stock = stockCap(state, ingredient.id)) {
   const maximum = doseMaximum(state, ingredient);
-  const step = ingredient.unit === 'g' ? Math.max(ingredient.step, state.scaleStep) : ingredient.step;
-  const count = Math.max(0, Math.floor((Math.min(maximum, stock) + EPSILON) / step));
-  const fullBatch = ingredient.id === 'distilled' && maximum <= stock && maximum - count * step > EPSILON
+  const distilled = ingredient.id === 'distilled';
+  let step = ingredient.step;
+  if (distilled && state.unit === 'gal') step = EIGHT_FLUID_OUNCES_L;
+  if (ingredient.unit === 'g') step = Math.max(step, state.scaleStep);
+  const limit = Math.min(maximum, stock);
+  let count = Math.max(0, Math.floor((limit + EPSILON) / step));
+  if (count > 0 && regularDose(step, count) > limit) count--;
+  const fullBatch = distilled && maximum <= stock && maximum !== regularDose(step, count)
     ? maximum : null;
   return { step, count, fullBatch, last: count + (fullBatch === null ? 0 : 1) };
 }
 
 export function doseAt(grid, index) {
-  return grid.fullBatch !== null && index === grid.last ? grid.fullBatch : Number((index * grid.step).toFixed(10));
+  return grid.fullBatch !== null && index === grid.last ? grid.fullBatch : regularDose(grid.step, index);
 }
 
 export function doseIndex(grid, amount) {
