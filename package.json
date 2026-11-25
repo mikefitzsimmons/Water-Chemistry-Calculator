@@ -1,0 +1,13 @@
+{
+  "name": "water-chemistry-calculator",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": "24.x" },
+  "scripts": {
+    "start": "node scripts/serve.mjs",
+    "test": "node --test \"tests/unit/*.test.js\"",
+    "test:browser": "playwright test"
+  },
+  "devDependencies": { "@playwright/test": "1.56.1" }
+}
