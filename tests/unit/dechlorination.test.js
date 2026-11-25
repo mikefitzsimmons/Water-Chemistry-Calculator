@@ -6,6 +6,7 @@ import { evaluate } from '../../src/evaluate.js';
 
 function example() {
   const state = defaultState();
+  state.startId = 'custom';
   state.batchL = 10;
   Object.assign(state.start, { chlorType: 'chlorine', chlorine: 3, chlorBasis: 'Cl2', Alk: 50 });
   return state;

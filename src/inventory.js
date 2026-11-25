@@ -24,19 +24,23 @@ export function doseAt(grid, index) {
   return grid.fullBatch !== null && index === grid.last ? grid.fullBatch : Number((index * grid.step).toFixed(10));
 }
 
-export function snapDose(state, ingredient, amount, stock) {
-  const grid = doseGrid(state, ingredient, stock);
+export function doseIndex(grid, amount) {
   const index = Math.max(0, Math.min(grid.count, Math.round(amount / grid.step)));
   const regular = doseAt(grid, index);
   return grid.fullBatch !== null && Math.abs(amount - grid.fullBatch) < Math.abs(amount - regular)
-    ? grid.fullBatch : regular;
+    ? grid.last : index;
+}
+
+export function snapDose(state, ingredient, amount, stock) {
+  const grid = doseGrid(state, ingredient, stock);
+  return doseAt(grid, doseIndex(grid, amount));
 }
 
 export function shortfalls(state, ingredients) {
   return ingredients.flatMap(ingredient => {
     const { id } = ingredient;
     const planned = state.enabled[id] ? state.adds[id] ?? 0 : 0;
-    const effective = id === 'distilled' ? Math.min(state.batchL, planned) : planned;
+    const effective = id === 'distilled' ? (state.startId === 'distilled' ? 0 : Math.min(state.batchL, planned)) : planned;
     const deficit = effective - stockCap(state, id);
     return deficit > EPSILON ? [{ id, amount: deficit }] : [];
   });

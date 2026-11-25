@@ -8,6 +8,7 @@ import { diagnose, solveRecipe } from '../../src/solver.js';
 const range = (min, ideal = min, max = ideal) => ({ min, ideal, max });
 function recipe(target, ids) {
   const state = defaultState();
+  state.startId = 'custom';
   state.batchL = 2;
   state.target = target;
   for (const g of INGREDIENTS) state.enabled[g.id] = ids.includes(g.id);

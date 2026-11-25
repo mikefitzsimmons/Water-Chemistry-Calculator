@@ -11,9 +11,9 @@ test('Calculate excludes stale disabled gypsum and dilution', async ({ page, con
   if (await chloride.count()) await chloride.uncheck();
   await page.locator('[data-enable="distilled"]').uncheck();
   await page.locator('#unitL').click();
-  await expect(page.locator('#startAmt')).toContainText('18.93 L');
+  await expect(page.locator('#startAmt')).toContainText('18.927 L');
   await page.locator('#solveBtn').click();
-  await expect(page.locator('#startAmt')).toContainText('18.93 L');
+  await expect(page.locator('#startAmt')).toContainText('18.927 L');
   await page.locator('#unitGal').click();
   await expect(page.locator('[data-amt="gypsum"]')).toHaveValue('6');
   await expect(page.locator('[data-amt="distilled"]')).toHaveValue('1');

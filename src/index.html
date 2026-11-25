@@ -1,425 +1,165 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="color-scheme" content="light dark" />
-    <link rel="icon" href="data:," />
-    <title>Water Chemistry Calculator — Static (Self-Hostable)</title>
-    <style>
-      :root{
-        color-scheme: light dark;
-        --bg:#edf0ec;
-        --card:#ffffff;
-        --card2:#f4f6f2;
-        --ink:#17211a;
-        --ink2:#4c5a50;
-        --line:#d5dcd2;
-        --accent:#b35c12;
-        --accent-ink:#ffffff;
-        --green:#1f6f4a;
-        --green-soft:#dcefe2;
-        --amber-soft:#f7e8d2;
-        --bad:#b3261e;
-        --bad-soft:#f9e2e0;
-        --shade:rgba(31,111,74,.30);
-        --track:#dde3da;
-        --hatch1:rgba(23,33,26,.34);
-        --hatch2:rgba(23,33,26,.10);
-        --shadow:0 1px 3px rgba(20,30,22,.10),0 8px 24px rgba(20,30,22,.06);
-        --radius:14px;
-      }
-      @media (prefers-color-scheme: dark){
-        :root{
-          --bg:#10140f;
-          --card:#1a201a;
-          --card2:#212822;
-          --ink:#e9efe7;
-          --ink2:#a9b8ab;
-          --line:#333d33;
-          --accent:#e09a3c;
-          --accent-ink:#1c1305;
-          --green:#5cc48c;
-          --green-soft:#173527;
-          --amber-soft:#3a2a12;
-          --bad:#ff9d94;
-          --bad-soft:#40201d;
-          --shade:rgba(92,196,140,.32);
-          --track:#2c352c;
-          --hatch1:rgba(233,239,231,.38);
-          --hatch2:rgba(233,239,231,.12);
-          --shadow:0 1px 3px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.3);
-        }
-      }
-      *{box-sizing:border-box}
-      html{-webkit-text-size-adjust:100%}
-      body{
-        margin:0;background:var(--bg);color:var(--ink);
-        font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
-        font-size:15px;line-height:1.45;
-      }
-      button,input,select{font:inherit;color:inherit}
-      button{cursor:pointer}
-      :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-
-      .wrap{max-width:1240px;margin:0 auto;padding:18px 16px 64px}
-      h1{font-size:26px;line-height:1.15;margin:0 0 4px;letter-spacing:-.02em;font-weight:800}
-      .lede{color:var(--ink2);margin:0 0 14px;max-width:72ch}
-      h2{font-size:18px;margin:0;letter-spacing:-.01em;font-weight:750}
-      h3{font-size:14px;margin:0 0 6px;font-weight:700}
-      .sub{color:var(--ink2);font-size:13px;margin:2px 0 0}
-      .small{font-size:12.5px;color:var(--ink2)}
-      .tiny{font-size:11.5px;color:var(--ink2)}
-
-      /* top controls */
-      .toolbar{
-        display:flex;flex-wrap:wrap;gap:10px;align-items:end;
-        background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
-        padding:12px 14px;box-shadow:var(--shadow);margin-bottom:16px;
-      }
-      .toolbar .field{display:flex;flex-direction:column;gap:4px}
-      .toolbar label,.lbl{font-size:12px;font-weight:650;color:var(--ink2);text-transform:none}
-      .toolbar .spacer{flex:1}
-      .btn{
-        appearance:none;border:1px solid var(--line);background:var(--card2);color:var(--ink);
-        border-radius:9px;padding:8px 13px;font-weight:650;font-size:14px;line-height:1.2;
-      }
-      .btn:hover{border-color:var(--ink2)}
-      .btn:disabled{opacity:.45;cursor:not-allowed}
-      .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
-      .btn.primary:hover{filter:brightness(1.07)}
-      .btn.big{width:100%;padding:13px;font-size:16px;border-radius:11px}
-      .seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
-      .seg button{border:0;background:var(--card2);padding:8px 12px;font-weight:650}
-      .seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
-      input[type="number"],input[type="text"],select{
-        background:var(--card);border:1px solid var(--line);border-radius:8px;padding:7px 9px;
-        min-width:0;
-      }
-      input[type="number"]{width:86px}
-      .toolbar input[type="number"]{width:96px}
-
-      /* layout */
-      .grid{display:grid;gap:16px;grid-template-columns:1fr;grid-template-areas:"start" "target" "adds" "final"}
-      @media (min-width:1020px){
-        .grid{grid-template-columns:minmax(0,1fr) 400px;grid-template-areas:"start final" "target final" "adds final"}
-      }
-      .card{
-        background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
-        padding:16px;box-shadow:var(--shadow);min-width:0;
-      }
-      .card header{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:12px;flex-wrap:wrap}
-      #sec-start{grid-area:start}#sec-target{grid-area:target}#sec-adds{grid-area:adds}
-      #sec-final{grid-area:final}
-      @media (min-width:1020px){
-        #sec-final{position:sticky;top:14px;align-self:start;max-height:calc(100vh - 28px);overflow:auto}
-      }
-
-      /* ion input grids */
-      .iongrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:10px}
-      .ionfield{display:flex;flex-direction:column;gap:4px}
-      .ionfield label{font-size:12px;font-weight:650;color:var(--ink2)}
-      .ionfield input{width:100%}
-      .ionfield .unit{font-weight:400}
-      .rowflex{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
-      .rowflex .field{display:flex;flex-direction:column;gap:4px}
-      .divider{border:0;border-top:1px solid var(--line);margin:14px 0}
-      .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:10px;margin-top:12px}
-      .tile{background:var(--card2);border:1px solid var(--line);border-radius:11px;padding:10px 12px}
-      .tile .t{font-size:11.5px;font-weight:650;color:var(--ink2)}
-      .tile .v{font-size:21px;font-weight:780;letter-spacing:-.01em;margin-top:1px}
-      .tile .v small{font-size:12px;font-weight:600;color:var(--ink2)}
-
-      /* saved profile chips */
-      .chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
-      .chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--card2);
-        border-radius:999px;padding:4px 6px 4px 11px;font-size:13px;font-weight:600}
-      .chip button{border:0;background:transparent;padding:2px 5px;border-radius:999px;font-weight:700;color:var(--ink2)}
-      .chip button:hover{color:var(--bad)}
-      .chip .apply{color:var(--ink)}
-      .chip .apply:hover{color:var(--accent)}
-
-      /* target bars */
-      .trow{padding:11px 0;border-top:1px solid var(--line)}
-      .trow:first-of-type{border-top:0}
-      .trow .thead{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
-      .trow .tname{font-weight:700}
-      .trow .tval{font-size:13px;color:var(--ink2)}
-      .trow .tval b{color:var(--ink);font-size:14px}
-      .inrange{color:var(--green);font-weight:700}
-      .outrange{color:var(--bad);font-weight:700}
-      .bar{position:relative;height:14px;background:var(--track);border-radius:7px;margin:8px 0 2px;overflow:visible}
-      .bar .shade{position:absolute;top:0;bottom:0;background:var(--shade);border-radius:7px}
-      .bar .idealmark{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--ink);opacity:.75}
-      .bar .valmark{position:absolute;top:-5px;width:12px;height:12px;border-radius:50%;
-        background:var(--accent);border:2.5px solid var(--card);transform:translateX(-50%);box-shadow:0 0 0 1px var(--line)}
-      .bar .ends{display:flex;justify-content:space-between;font-size:11px;color:var(--ink2);margin-top:3px}
-      .dual{position:relative;height:26px;margin-top:6px}
-      .dual input[type="range"]{position:absolute;left:0;right:0;top:6px;width:100%;margin:0;pointer-events:none;
-        -webkit-appearance:none;appearance:none;background:transparent;height:14px}
-      .dual input[type="range"]::-webkit-slider-runnable-track{background:transparent;height:14px}
-      .dual input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;pointer-events:auto;width:20px;height:20px;margin-top:-3px;
-        border-radius:50%;background:var(--card);border:2px solid var(--green);cursor:grab}
-      .dual input[type="range"]::-moz-range-track{background:transparent}
-      .dual input[type="range"]::-moz-range-thumb{pointer-events:auto;width:16px;height:16px;border-radius:50%;
-        background:var(--card);border:2px solid var(--green);cursor:grab}
-      .idealrow{display:flex;align-items:center;gap:9px;margin-top:2px}
-      .idealrow label{font-size:12px;color:var(--ink2);font-weight:650;white-space:nowrap}
-      .idealrow input[type="range"]{flex:1}
-      .idealrow input[type="number"]{width:72px}
-      .mmrow{display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap}
-      .mmrow label{font-size:12px;color:var(--ink2);font-weight:650}
-      .mmrow input[type="number"]{width:72px}
-
-      input[type="range"]{-webkit-appearance:none;appearance:none;height:8px;border-radius:4px;background:var(--track);cursor:pointer}
-      input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;border-radius:50%;
-        background:var(--card);border:2.5px solid var(--accent);box-shadow:0 1px 3px rgba(0,0,0,.25);cursor:grab}
-      input[type="range"]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;
-        background:var(--card);border:2.5px solid var(--accent);cursor:grab}
-      input[type="range"]:disabled::-webkit-slider-thumb{border-color:var(--ink2)}
-      input[type="range"]:disabled{cursor:not-allowed;opacity:.55}
-
-      /* additions */
-      .addrow{padding:12px 0;border-top:1px solid var(--line)}
-      .addrow:first-of-type{border-top:0}
-      .addrow.disabled{opacity:.55}
-      .addrow .ahead{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
-      .addrow .aname{font-weight:700}
-      .addrow .anote{font-size:12px;color:var(--ink2)}
-      .addrow .aamt{margin-left:auto;display:flex;align-items:center;gap:6px}
-      .addrow .aamt input{width:84px;text-align:right}
-      .addrow .aamt .u{font-size:12.5px;color:var(--ink2);min-width:26px}
-      .addrow input[type="range"]{width:100%;margin-top:9px}
-      .addrow .ends{display:flex;justify-content:space-between;font-size:11px;color:var(--ink2);margin-top:3px}
-      .warn{color:var(--bad);font-size:12.5px;font-weight:600;margin-top:5px}
-      .ok-note{color:var(--green);font-size:12.5px;font-weight:600;margin-top:5px}
-      .check{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;font-weight:600;cursor:pointer}
-      .check input{width:17px;height:17px;accent-color:var(--accent)}
-      .tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 7px;border-radius:999px;background:var(--amber-soft);color:var(--accent);vertical-align:1px}
-      .tag.green{background:var(--green-soft);color:var(--green)}
-
-      /* final */
-      .frow{display:grid;grid-template-columns:86px 1fr 74px;gap:9px;align-items:center;padding:7px 0;border-top:1px solid var(--line)}
-      .frow:first-of-type{border-top:0}
-      .frow .fn{font-weight:650;font-size:13.5px}
-      .frow .fv{text-align:right;font-weight:750}
-      .frow .fv small{display:block;font-weight:550;color:var(--ink2);font-size:11px}
-      .mini{position:relative;height:10px;background:var(--track);border-radius:5px}
-      .mini .shade{position:absolute;top:0;bottom:0;background:var(--shade);border-radius:5px}
-      .mini .idealmark{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--ink);opacity:.7}
-      .mini .valmark{position:absolute;top:-3px;width:11px;height:11px;border-radius:50%;background:var(--accent);
-        border:2px solid var(--card);transform:translateX(-50%)}
-      .notes{margin:10px 0 0;padding:0;list-style:none}
-      .notes li{background:var(--bad-soft);border-radius:9px;padding:8px 11px;font-size:13px;margin-top:7px}
-      .notes li.good{background:var(--green-soft)}
-      .presetbox{background:var(--card2);border:1px solid var(--line);border-radius:11px;padding:11px 12px;margin-top:12px}
-      .presetbox p{margin:5px 0 0;font-size:13.5px}
-
-      /* drawer */
-      .backdrop{position:fixed;inset:0;background:rgba(10,14,10,.5);opacity:0;pointer-events:none;transition:opacity .22s;z-index:40}
-      .backdrop.open{opacity:1;pointer-events:auto}
-      .drawer{
-        position:fixed;top:0;right:0;height:100dvh;width:min(430px,100vw);z-index:50;
-        background:var(--card);border-left:1px solid var(--line);box-shadow:-12px 0 32px rgba(0,0,0,.25);
-        transform:translateX(102%);transition:transform .25s ease;display:flex;flex-direction:column;
-      }
-      @media (max-width:640px){
-        .drawer{top:auto;bottom:0;left:0;right:0;width:auto;height:88dvh;border-left:0;border-top:1px solid var(--line);
-          border-radius:18px 18px 0 0;transform:translateY(103%)}
-      }
-      .drawer.open{transform:none}
-      .drawer header{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:16px 16px 10px;border-bottom:1px solid var(--line)}
-      .drawer .body{overflow:auto;padding:6px 16px 16px;flex:1}
-      .drawer footer{padding:12px 16px;border-top:1px solid var(--line)}
-      .drow{padding:11px 0;border-top:1px solid var(--line)}
-      .drow:first-of-type{border-top:0}
-      .drow .dhead{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
-      .drow .dname{font-weight:700}
-      .drow .dstock{display:flex;align-items:center;gap:7px;margin-top:8px;flex-wrap:wrap}
-      .drow .dstock input[type="number"]{width:92px}
-      .xbtn{border:1px solid var(--line);background:var(--card2);border-radius:8px;width:34px;height:34px;font-size:16px;line-height:1}
-      @media (prefers-reduced-motion: reduce){
-        .drawer,.backdrop{transition:none}
-      }
-      .toast{
-        position:fixed;left:50%;bottom:18px;transform:translate(-50%,80px);z-index:60;
-        background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-weight:600;font-size:14px;
-        transition:transform .25s;max-width:92vw;text-align:center;
-      }
-      .toast.show{transform:translate(-50%,0)}
-      .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-    </style>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="./styles.css">
+    <title>Brewing Water Chemistry Calculator</title>
   </head>
   <body>
-    <div class="wrap">
-      <h1>Brewing Water Chemistry Calculator</h1>
-      <p class="lede">Build your brewing water from a starting profile: set a target, stock the Ingredient
-        Drawer with what you own, then let the solver dose the additions — or fine-tune every slider yourself.
-        Water pH and residual alkalinity are estimates for the water itself; mash pH is out of scope.</p>
-
-      <div class="toolbar" role="group" aria-label="Batch controls">
-        <div class="field">
-          <label for="batchInput">Batch size (resulting water)</label>
-          <input type="number" id="batchInput" min="0.5" step="0.5" />
+    <main class="wrap">
+      <div class="site-header">
+        <div>
+          <h1>Brewing Water Chemistry Calculator</h1>
+          <p class="lede">Plan the water for a batch of beer before it goes into the mash.</p>
         </div>
-        <div class="field">
-          <label>Units</label>
-          <div class="seg" role="group" aria-label="Volume units">
-            <button type="button" id="unitGal">Gallons</button>
-            <button type="button" id="unitL">Litres</button>
-          </div>
-        </div>
-        <div class="field">
-          <label for="scaleStep">Scale reads to</label>
-          <select id="scaleStep">
-            <option value="0.01">0.01 g (10 mg)</option>
-            <option value="0.05">0.05 g (50 mg)</option>
-            <option value="0.1">0.1 g (100 mg)</option>
-            <option value="0.5">0.5 g</option>
-            <option value="1">1 g</option>
-          </select>
-        </div>
-        <div class="spacer"></div>
-        <div class="field">
-          <label aria-hidden="true">&nbsp;</label>
-          <button type="button" class="btn" id="undoBtn" disabled>↩ Undo</button>
-        </div>
-        <div class="field">
-          <label aria-hidden="true">&nbsp;</label>
-          <div class="rowflex">
+        <div>
+          <div class="site-tools">
+            <button type="button" class="btn" id="undoBtn" disabled>Undo</button>
             <button type="button" class="btn" id="exportBtn">Export backup</button>
             <button type="button" class="btn" id="importBtn">Import backup</button>
-            <input type="file" id="backupInput" accept=".json,application/json" hidden />
+            <input type="file" id="backupInput" accept=".json,application/json" hidden>
           </div>
           <span class="small" id="saveStatus" role="status"></span>
         </div>
       </div>
-
       <div class="grid">
         <section class="card" id="sec-start" aria-labelledby="h-start">
           <header>
-            <div>
-              <h2 id="h-start">Starting Water</h2>
-              <p class="sub">Your source water before additions. Distilled is the default.</p>
-            </div>
+            <h2 id="h-start">Starting Water</h2>
             <span class="tag green" id="startNameTag">Distilled</span>
           </header>
+          <label class="lbl" for="sourceSelect">Water source</label>
+          <select id="sourceSelect"></select>
+          <p id="sourceInfo" class="small"></p>
+          <div class="rowflex">
+            <div class="field">
+              <label class="lbl" for="alkBasis">Water report basis</label>
+              <select id="alkBasis">
+                <option value="CaCO3">Alkalinity as CaCO₃</option>
+                <option value="HCO3">Bicarbonate as HCO₃⁻</option>
+              </select>
+            </div>
+          </div>
           <div class="iongrid" id="startIons"></div>
           <div class="tiles">
-            <div class="tile"><div class="t">Starting amount (auto)</div><div class="v" id="startAmt">–</div></div>
-            <div class="tile"><div class="t">Alkalinity (as CaCO₃)</div><div class="v" id="startAlk">–</div></div>
-            <div class="tile"><div class="t">Residual alkalinity</div><div class="v" id="startRA">–</div></div>
+            <div class="tile"><div class="t">Source volume</div><div class="v" id="startAmt"></div></div>
           </div>
-          <hr class="divider" />
-          <h3>Chlorine / chloramine</h3>
+          <hr class="divider">
+          <details id="disinfectant">
+            <summary>Source disinfectant</summary>
+            <div class="rowflex">
+              <div class="field">
+                <label class="lbl" for="chlorType">Disinfectant</label>
+                <select id="chlorType">
+                  <option value="none">None</option>
+                  <option value="chlorine">Free chlorine</option>
+                  <option value="chloramine">Monochloramine</option>
+                </select>
+              </div>
+              <div class="field">
+                <label class="lbl" for="chlorPpm">Residual (mg/L)</label>
+                <input type="number" id="chlorPpm" min="0" step="any">
+              </div>
+              <div class="field">
+                <label class="lbl" for="chlorBasis">Reporting basis</label>
+                <select id="chlorBasis">
+                  <option value="">Unknown</option>
+                  <option value="Cl2">As Cl₂</option>
+                  <option value="compound">As reported compound</option>
+                </select>
+              </div>
+            </div>
+          </details>
+          <hr class="divider">
           <div class="rowflex">
             <div class="field">
-              <label class="lbl" for="chlorPpm">Residual (mg/L)</label>
-              <input type="number" id="chlorPpm" min="0" step="any" />
-            </div>
-            <div class="field">
-              <label class="lbl" for="chlorType">Disinfectant</label>
-              <select id="chlorType">
-                <option value="none">None / not chlorinated</option>
-                <option value="chlorine">Chlorine</option>
-                <option value="chloramine">Chloramine</option>
-              </select>
-            </div>
-            <div class="field">
-              <label class="lbl" for="chlorBasis">Reporting basis</label>
-              <select id="chlorBasis">
-                <option value="">Unknown</option>
-                <option value="Cl2">As Cl₂</option>
-                <option value="compound">As reported compound</option>
-              </select>
-            </div>
-          </div>
-          <hr class="divider" />
-          <h3>Saved starting profiles</h3>
-          <div class="rowflex">
-            <div class="field" style="flex:1;min-width:170px">
-              <label class="lbl" for="saveStartName">Save current profile as</label>
-              <input type="text" id="saveStartName" placeholder="e.g. Home tap" style="width:100%" />
+              <label class="lbl" for="saveStartName">Starting profile name</label>
+              <input type="text" id="saveStartName" placeholder="e.g. Home tap">
             </div>
             <button type="button" class="btn" id="saveStartBtn">Save profile</button>
           </div>
           <div class="chips" id="startChips"></div>
         </section>
 
-        <section class="card" id="sec-target" aria-labelledby="h-target">
-          <header>
-            <div>
-              <h2 id="h-target">Target Profile</h2>
-              <p class="sub">Bars run 0 → the most you could have before the water turns undrinkable.
-                The shaded band is your target range; the tick is the ideal point.</p>
-            </div>
-          </header>
-          <div class="rowflex" style="margin-bottom:6px">
-            <div class="field" style="flex:1;min-width:180px">
-              <label class="lbl" for="presetSel">Preset</label>
-              <select id="presetSel" style="width:100%"></select>
-            </div>
-          </div>
-          <div class="presetbox" id="presetInfo"></div>
-          <div id="targetRows"></div>
-          <hr class="divider" />
-          <h3>Save as a custom preset</h3>
-          <div class="rowflex">
-            <div class="field" style="flex:1;min-width:150px">
-              <label class="lbl" for="savePresetName">Name</label>
-              <input type="text" id="savePresetName" placeholder="e.g. My house IPA" style="width:100%" />
-            </div>
-            <div class="field" style="flex:2;min-width:180px">
-              <label class="lbl" for="savePresetNote">Why it works (optional)</label>
-              <input type="text" id="savePresetNote" placeholder="Short explanation" style="width:100%" />
-            </div>
-            <button type="button" class="btn" id="savePresetBtn">Save preset</button>
-          </div>
-          <div class="chips" id="presetChips"></div>
-        </section>
-
         <section class="card" id="sec-adds" aria-labelledby="h-adds">
           <header>
-            <div>
-              <h2 id="h-adds">Additions</h2>
-              <p class="sub">Only what you own (set in the Ingredient Drawer) can be dosed. Sliders always run
-                0 → max addable; the hatched stretch is beyond what you have on hand.</p>
-            </div>
-            <button type="button" class="btn primary" id="openDrawerBtn">Ingredient Drawer · <span id="drawerCount">0</span> on hand</button>
+            <h2 id="h-adds">Additions</h2>
+            <button type="button" class="btn" id="openDrawerBtn" aria-haspopup="dialog">Ingredient Drawer · <span id="drawerCount">0</span> on hand</button>
           </header>
+          <div class="field">
+            <label class="lbl" for="scaleStep">Gram scale increment</label>
+            <select id="scaleStep">
+              <option value="0.01">0.01 g</option>
+              <option value="0.05">0.05 g</option>
+              <option value="0.1">0.1 g</option>
+              <option value="0.5">0.5 g</option>
+              <option value="1">1 g</option>
+            </select>
+          </div>
           <div id="addsList"></div>
-          <p class="small" style="margin-top:10px">Coming later: a “Made this water” button that subtracts the
-            recipe amounts above from your Ingredient Drawer stock.</p>
+          <p class="small">Coming later · Mark a batch made and deduct its ingredients from stock.</p>
         </section>
 
         <section class="card" id="sec-final" aria-labelledby="h-final">
           <header>
-            <div>
-              <h2 id="h-final">Final Water</h2>
-              <p class="sub">Live result of starting water + additions, at batch size.</p>
-            </div>
+            <h2 id="h-final">Treated Water</h2>
           </header>
+          <div class="rowflex batch-controls">
+            <div class="field">
+              <label class="lbl" for="batchInput">Treated batch volume (<span id="batchUnit">gal</span>)</label>
+              <input type="number" id="batchInput" min="0" step="any">
+            </div>
+            <div class="seg" role="group" aria-label="Volume units">
+              <button type="button" id="unitGal">US gallons</button>
+              <button type="button" id="unitL">Liters</button>
+            </div>
+          </div>
+          <label class="lbl" for="presetSel">Target preset</label>
+          <select id="presetSel"></select>
+          <div class="presetbox" id="presetInfo"></div>
+          <h3 class="section-subtitle">Target ranges</h3>
+          <p class="small results-units">Concentrations in mg/L. Alkalinity is expressed as CaCO₃.</p>
+          <label class="check"><input type="checkbox" id="pHTargetEnabled"> Include a pH target</label>
+          <div id="targetRows" class="target-grid"></div>
+          <details id="customTargets">
+            <summary>Saved targets</summary>
+            <div class="rowflex">
+              <div class="field">
+                <label class="lbl" for="savePresetName">Target name</label>
+                <input type="text" id="savePresetName" placeholder="e.g. House IPA">
+              </div>
+              <div class="field">
+                <label class="lbl" for="savePresetNote">Description (optional)</label>
+                <input type="text" id="savePresetNote">
+              </div>
+              <button type="button" class="btn" id="savePresetBtn">Save target</button>
+            </div>
+            <div class="chips" id="presetChips"></div>
+          </details>
+          <hr class="divider">
+          <button type="button" class="btn primary big" id="solveBtn">Calculate additions</button>
+          <p class="small" id="solveStatus" role="status"></p>
+          <h3 class="section-subtitle">Calculated profile</h3>
           <div id="finalRows"></div>
           <div class="tiles">
-            <div class="tile"><div class="t">Estimated pH</div><div class="v" id="finalPH">–</div></div>
-            <div class="tile"><div class="t">Residual alkalinity</div><div class="v" id="finalRA">–</div></div>
-            <div class="tile"><div class="t">SO₄ : Cl ratio</div><div class="v" id="finalRatio">–</div></div>
+            <div class="tile"><div class="t">Estimated pH</div><div class="v" id="finalPH"></div></div>
+            <div class="tile"><div class="t">Residual alkalinity</div><div class="v" id="finalRA"></div></div>
+            <div class="tile"><div class="t">Sulfate to chloride</div><div class="v" id="finalRatio"></div></div>
           </div>
           <ul class="notes" id="finalNotes"></ul>
-          <hr class="divider" />
-          <button type="button" class="btn primary big" id="solveBtn">Calculate additions to match target</button>
-          <p class="small" id="solveStatus" role="status"></p>
         </section>
       </div>
-    </div>
+    </main>
 
     <div class="backdrop" id="backdrop"></div>
     <aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-label="Ingredient Drawer" aria-hidden="true" inert>
       <header>
         <div>
           <h2>Ingredient Drawer</h2>
-          <p class="sub">Setup, done once: tick what you own and how much of it you have.
-            Stock is a hard limit for the solver. Mark an item Unlimited if you can always get more.</p>
+          <p class="sub">Track food-grade ingredients and their on-hand quantities.</p>
         </div>
         <button type="button" class="xbtn" id="closeDrawerBtn" aria-label="Close drawer">✕</button>
       </header>
@@ -427,12 +167,10 @@
       <div class="body" id="drawerBody"></div>
       <footer>
         <button type="button" class="btn primary big" id="doneDrawerBtn">Done</button>
-        <p class="small" style="margin-top:8px">Coming later: “Made this water” will live here — it will subtract
-          a finished recipe’s amounts from the stock below.</p>
+        <p class="small">Coming later · Deduct the amounts used when you make a batch.</p>
       </footer>
     </aside>
     <div class="toast" id="toast" role="status"></div>
-
     <script type="module" src="./app.js"></script>
   </body>
 </html>

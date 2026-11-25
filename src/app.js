@@ -1,12 +1,11 @@
 import { decodeBackup, encodeBackup, newId, readSave, writeSave } from './storage.js';
-/* ================= data ================= */
-import { gallonsToLiters, litersToGallons, fromVolumeDisplay, toVolumeDisplay } from './units.js';
+import { fromVolumeDisplay, toVolumeDisplay, alkAsCaCO3, alkAsBicarbonate } from './units.js';
 import { INGREDIENTS, ingredientById as ingById } from './catalog.js';
 import { diagnose } from './solver.js';
 import { dechlorination } from './dechlorination.js';
-import { evaluate, mixVolumes } from './evaluate.js';
-import { stockCap as availableStock, doseMaximum, doseGrid, snapDose, shortfalls } from './inventory.js';
-import { IONS, ionById, PRESETS, presetById, defaultState } from './data.js';
+import { evaluate, mixVolumes, usesDilution } from './evaluate.js';
+import { stockCap as availableStock, doseMaximum, doseGrid, doseAt, doseIndex, snapDose, shortfalls } from './inventory.js';
+import { IONS, STARTS, PRESETS, presetById, defaultState } from './data.js';
 
 const getStorage = () => window.localStorage;
 const loaded = readSave(getStorage, defaultState());
@@ -54,7 +53,7 @@ function undo(){
 function $(id){ return document.getElementById(id); }
 function esc(s){ return String(s).replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
 function fmt(n, dp){ if (!Number.isFinite(n)) return "—"; return Number(n.toFixed(dp===undefined?0:dp)).toString(); }
-function volLabel(liters){ return fmt(toVolumeDisplay(liters, S.unit), 2) + " " + S.unit; }
+function volLabel(liters){ return fmt(toVolumeDisplay(liters, S.unit), 3) + " " + S.unit; }
 var toastTimer = null;
 function toast(msg){
   var t = $("toast"); t.textContent = msg; t.classList.add("show");
@@ -71,89 +70,78 @@ function stockCap(g){ return availableStock(S, g.id); }
 function sliderMax(g){ return doseMaximum(S, g); }
 
 /* ================= chemistry ================= */
-function computeFinal(){
-  return evaluate(S, INGREDIENTS, IONS.map(ion => ion.id)).profile;
-}
 /* ================= rendering: starting ================= */
 function renderStart(){
-  var html = "";
-  IONS.forEach(function(ion){
-    html += '<div class="ionfield"><label for="start-'+ion.id+'">'+ion.name+' <span class="unit">(ppm)</span></label>'+
-      '<input type="number" min="0" step="1" id="start-'+ion.id+'" data-ion="'+ion.id+'" value="'+(S.start[ion.id] ?? "")+'"></div>';
-  });
-  html += '<div class="ionfield"><label for="start-pH">pH</label>'+
-    '<input type="number" min="3" max="10" step="0.1" id="start-pH" value="'+(S.start.pH ?? "")+'"></div>';
-  $("startIons").innerHTML = html;
+  const { start } = S;
+  const bicarbonate = start.alkBasis === "HCO3";
+  $("startIons").innerHTML = IONS.map(ion => {
+    const name = ion.id === "Alk" ? (bicarbonate ? "Bicarbonate" : "Alkalinity") : ion.name;
+    const value = ion.id === "Alk" && bicarbonate ? alkAsBicarbonate(start.Alk) : start[ion.id];
+    return `<div class="ionfield">
+      <label for="start-${ion.id}">${name} <span class="unit">(mg/L)</span></label>
+      <input type="number" min="0" step="any" id="start-${ion.id}" data-report="${ion.id}" value="${value === null ? "" : fmt(value, 6)}">
+    </div>`;
+  }).join("") + `<div class="ionfield">
+    <label for="start-pH">Source pH <span class="unit">(optional)</span></label>
+    <input type="number" min="0" max="14" step="any" id="start-pH" data-report="pH" value="${start.pH ?? ""}">
+  </div>`;
+  $("alkBasis").value = start.alkBasis;
   $("startNameTag").textContent = S.startName;
-  $("chlorPpm").value = S.start.chlorine;
-  $("chlorType").value = S.start.chlorType;
-  $("chlorBasis").value = S.start.chlorBasis ?? "";
-  $("chlorBasis").options[2].textContent = S.start.chlorType === "chloramine" ? "As NH₂Cl" : "As HOCl";
-  var chips = '<span class="chip"><button type="button" class="apply" data-apply-start="-1">Distilled</button></span>';
-  S.savedStarts.forEach(function(p, idx){
-    chips += '<span class="chip"><button type="button" class="apply" data-apply-start="'+p.id+'">'+esc(p.name)+'</button>'+
-      '<button type="button" data-del-start="'+p.id+'" aria-label="Delete '+esc(p.name)+'">✕</button></span>';
-  });
-  $("startChips").innerHTML = chips;
+  const starts = [...STARTS, ...S.savedStarts.map(profile => ({ ...profile, id: "saved:" + profile.id }))];
+  $("sourceSelect").innerHTML = starts.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
+  $("sourceSelect").value = S.startId;
+  const source = STARTS.find(p => p.id === S.startId);
+  $("sourceInfo").innerHTML = source ? esc(source.description) +
+    (source.reference ? ` <a href="${source.reference}" rel="noopener" target="_blank">Source</a>` : "") : "";
+  $("sourceInfo").hidden = !source;
+  $("chlorPpm").value = start.chlorine ?? "";
+  $("chlorType").value = start.chlorType;
+  $("chlorBasis").value = start.chlorBasis ?? "";
+  $("chlorBasis").options[2].textContent = start.chlorType === "chloramine" ? "As NH₂Cl" : "As HOCl";
+  if (start.chlorType !== "none") $("disinfectant").open = true;
+  $("startChips").innerHTML = S.savedStarts.map(p => `<span class="chip">
+    <button type="button" class="apply" data-apply-start="${p.id}">${esc(p.name)}</button>
+    <button type="button" data-del-start="${p.id}" aria-label="Delete ${esc(p.name)}">✕</button>
+  </span>`).join("");
   updateStartTiles();
 }
 function updateStartTiles(){
-  $("startAmt").innerHTML = volLabel(sourceVolume()) + ' <small>of '+volLabel(S.batchL)+'</small>';
-  $("startAlk").innerHTML = fmt(S.start.Alk) + ' <small>ppm</small>';
-  $("startRA").innerHTML = fmt(residualAlk(S.start)) + ' <small>ppm as CaCO₃</small>';
+  $("startAmt").innerHTML = volLabel(sourceVolume()) + ' <small>of ' + volLabel(S.batchL) + '</small>';
 }
 
-/* ================= rendering: target ================= */
 function currentPresetObj(){
-  var p = presetById(S.targetPreset);
-  if (p) return p;
-  for (var i=0;i<S.customPresets.length;i++) if ("custom:"+S.customPresets[i].id === S.targetPreset) return S.customPresets[i];
-  return null;
+  return presetById(S.targetPreset) ?? S.customPresets.find(p => "custom:" + p.id === S.targetPreset);
 }
+
 function renderPresetSelect(){
-  var html = "";
-  PRESETS.forEach(function(p){ html += '<option value="'+p.id+'">'+esc(p.name)+' ('+p.kind+')</option>'; });
-  S.customPresets.forEach(function(p, i){ html += '<option value="custom:'+p.id+'">'+esc(p.name)+' (Custom)</option>'; });
-  html += '<option value="__customised">Customised ranges</option>';
-  $("presetSel").innerHTML = html;
+  const presets = [...PRESETS, ...S.customPresets.map(p => ({ ...p, id: "custom:" + p.id }))];
+  $("presetSel").innerHTML = presets.map(p =>
+    `<option value="${p.id}">${esc(p.name)} (${p.kind === "Historical" ? "Historical" : p.kind === "Style" ? "Style" : "Custom"})</option>`
+  ).join("") + '<option value="__customised" disabled>Edited target</option>';
   $("presetSel").value = S.targetPreset;
-  var p = currentPresetObj();
-  $("presetInfo").innerHTML = p
-    ? '<h3>'+esc(p.name)+' <span class="tag">'+esc(p.kind||"Custom")+'</span></h3><p>'+esc(p.blurb||"")+'</p>'
-    : '<h3>Customised ranges</h3><p>You have adjusted the ranges by hand. Save them as a custom preset to reuse them.</p>';
-  var chips = "";
-  S.customPresets.forEach(function(cp, i){
-    chips += '<span class="chip"><button type="button" class="apply" data-apply-preset="'+cp.id+'">'+esc(cp.name)+'</button>'+
-      '<button type="button" data-del-preset="'+cp.id+'" aria-label="Delete '+esc(cp.name)+'">✕</button></span>';
-  });
-  $("presetChips").innerHTML = chips;
+  const p = currentPresetObj();
+  $("presetInfo").hidden = !p?.blurb;
+  const reference = presetById(S.targetPreset)?.source;
+  $("presetInfo").innerHTML = p ? esc(p.blurb) +
+    (reference ? ` <a href="${reference}" rel="noopener" target="_blank">Reference</a>` : "") : "";
+  $("presetChips").innerHTML = S.customPresets.map(saved => `<span class="chip">
+    <button type="button" class="apply" data-apply-preset="${saved.id}">${esc(saved.name)}</button>
+    <button type="button" data-del-preset="${saved.id}" aria-label="Delete ${esc(saved.name)}">✕</button>
+  </span>`).join("");
 }
-function renderTarget(fin){
-  fin = fin || computeFinal();
-  var html = "";
-  IONS.forEach(function(ion){
-    var t = S.target[ion.id], v = fin[ion.id], ceil = ion.ceil;
-    var pct = function(x){ return Math.max(0, Math.min(100, x/ceil*100)); };
-    var inR = v !== null && v >= t.min && v <= t.max;
-    html += '<div class="trow" data-ion="'+ion.id+'">'+
-      '<div class="thead"><span class="tname">'+ion.name+' <span class="tiny">'+ion.sym+'</span></span>'+
-      '<span class="tval">now <b>'+fmt(v)+'</b> ppm · <span class="'+(inR?"inrange":"outrange")+'">'+(v === null ? "missing source value" : inR ? "in range" : "out of range")+'</span></span></div>'+
-      '<div class="bar"><div class="shade" style="left:'+pct(t.min)+'%;width:'+(pct(t.max)-pct(t.min))+'%"></div>'+
-      '<div class="idealmark" style="left:'+pct(t.ideal)+'%"></div>'+
-      '<div class="valmark" style="left:'+pct(v)+'%"></div>'+
-      '<div class="ends"><span>0</span><span>'+ceil+' ppm</span></div></div>'+
-      '<div class="dual">'+
-        '<input type="range" min="0" max="'+ceil+'" step="1" value="'+t.min+'" data-tmin="'+ion.id+'" aria-label="'+ion.name+' target minimum">'+
-        '<input type="range" min="0" max="'+ceil+'" step="1" value="'+t.max+'" data-tmax="'+ion.id+'" aria-label="'+ion.name+' target maximum">'+
-      '</div>'+
-      '<div class="mmrow"><label>Min <input type="number" min="0" max="'+ceil+'" step="1" value="'+fmt(t.min, 2)+'" data-tminn="'+ion.id+'"></label>'+
-      '<label>Max <input type="number" min="0" max="'+ceil+'" step="1" value="'+fmt(t.max, 2)+'" data-tmaxn="'+ion.id+'"></label></div>'+
-      '<div class="idealrow"><label for="ideal-'+ion.id+'">Ideal</label>'+
-      '<input type="range" min="0" max="'+ceil+'" step="1" value="'+t.ideal+'" data-tideal="'+ion.id+'" id="ideal-'+ion.id+'">'+
-      '<input type="number" min="0" max="'+ceil+'" step="1" value="'+fmt(t.ideal, 2)+'" data-tidealn="'+ion.id+'"></div>'+
-    '</div>';
-  });
-  $("targetRows").innerHTML = html;
+
+function renderTarget(){
+  $("pHTargetEnabled").checked = S.target.pH !== null;
+  const ions = S.target.pH ? [...IONS, { id: "pH", name: "pH" }] : IONS;
+  const headers = '<span></span><span class="lbl">Minimum</span><span class="lbl">Preferred</span><span class="lbl">Maximum</span>';
+  $("targetRows").innerHTML = headers + ions.map(({ id, name }) => {
+    const fields = Object.entries({ min: "minimum", ideal: "preferred", max: "maximum" }).map(([key, label]) =>
+      `<input type="number" step="any" ${id === "Alk" ? "" : 'min="0"'} ${id === "pH" ? 'max="14"' : ""}
+        aria-label="${name} target ${label}" data-target-key="${id}" data-target-bound="${key}"
+        value="${fmt(S.target[id][key], 5)}">`
+    ).join("");
+    return `<span class="target-label">${name}</span>` + fields;
+  }).join("");
 }
 
 /* ================= rendering: additions ================= */
@@ -193,52 +181,49 @@ function renderAdds(){
       <p data-treatment class="anote">${esc(treatmentText(dose))}</p>
     </div>`;
   }
-  INGREDIENTS.forEach(function(g){
-    if (g.auto || g.inventoryOnly) return;
-    var d = S.drawer[g.id];
-    if (!d?.owned && !(S.enabled[g.id] && S.adds[g.id] > 0)){ return; }
+  for (const g of INGREDIENTS) {
+    const dilution = g.id === "distilled";
+    if (g.inventoryOnly) {
+      if (S.enabled[g.id] && S.adds[g.id] > 0) {
+        html += `<div class="addrow">
+          <label class="check"><input type="checkbox" data-enable="${g.id}" checked> ${g.name}</label>
+          <p class="small">Legacy planned amount · ${amountLabel(g, S.adds[g.id])}. The model leaves its contribution unevaluated.</p>
+        </div>`;
+      }
+      continue;
+    }
+    if (g.auto && !dilution || dilution && !usesDilution(S)) continue;
+    const enabled = S.enabled[g.id];
+    const planned = dilution ? Math.min(S.batchL, S.adds[g.id]) : S.adds[g.id];
+    if (!S.drawer[g.id].owned && !(enabled && planned > 0)) continue;
     anyOwned = true;
-    var max = sliderMax(g), amt = S.adds[g.id]||0;
-    var cap = stockCap(g);
-    var stockFrac = (cap===Infinity || max<=0) ? 1 : Math.max(0, Math.min(1, cap/max));
-    var en = S.enabled[g.id];
-    var step = doseGrid(S, g).step;
-    html += '<div class="addrow'+(en?"":" disabled")+'" data-addrow="'+g.id+'"><div class="ahead">'+
-      '<label class="check"><input type="checkbox" data-enable="'+g.id+'" '+(en?"checked":"")+' aria-label="Enable '+esc(g.name)+'">'+
-      '<span class="aname">'+esc(g.name)+'</span></label>'+
-      '<span class="anote">'+esc(g.sub)+'</span>'+
-      '<span class="aamt"><input type="number" min="0" step="'+step+'" value="'+fmt(amt, g.unit==="g"?2:1)+'" data-amt="'+g.id+'" '+(en?"":"disabled")+' aria-label="'+esc(g.name)+' amount">'+
-      '<span class="u">'+g.unit+'</span></span></div>'+
-      '<input type="range" min="0" max="'+fmt(max,2)+'" step="'+step+'" value="'+amt+'" data-slider="'+g.id+'" '+(en?"":"disabled")+
-        ' style="background:'+sliderBG(max>0?amt/max:0, stockFrac)+'" aria-label="'+esc(g.name)+' slider">'+
-      '<div class="ends"><span>0</span><span>'+(cap===Infinity ? 'on hand: unlimited' : 'on hand: '+fmt(cap, g.unit==="g"?1:0)+' '+g.unit)+' · max '+fmt(max,1)+' '+g.unit+'</span></div>'+
-      '<p class="warn" data-stock-warning '+(en && amt > cap ? '' : 'hidden')+'>This amount exceeds your stock.</p>'+
-    '</div>';
-  });
-  /* distilled water row */
-  (function(){
-    var g = ingById("distilled"), d = S.drawer.distilled;
-    if (!d?.owned && !(S.enabled.distilled && S.adds.distilled > 0)){ return; }
-    anyOwned = true;
-    var amtGal = S.adds.distilled||0;
-    var dispAmt = toVolumeDisplay(amtGal, S.unit);
-    var maxDisp = toVolumeDisplay(S.batchL, S.unit);
-    var capGal = stockCap(g);
-    var stockFrac = capGal===Infinity ? 1 : Math.max(0, Math.min(1, capGal/S.batchL));
-    var en = S.enabled.distilled;
-    html += '<div class="addrow'+(en?"":" disabled")+'" data-addrow="distilled"><div class="ahead">'+
-      '<label class="check"><input type="checkbox" data-enable="distilled" '+(en?"checked":"")+'><span class="aname">Distilled Water</span></label>'+
-      '<span class="anote">dilutes the starting water; starting amount fills in automatically</span>'+
-      '<span class="aamt"><input type="number" min="0" step="0.25" value="'+fmt(dispAmt,2)+'" data-amt="distilled" '+(en?"":"disabled")+' aria-label="Distilled water amount">'+
-      '<span class="u">'+(S.unit==="gal"?"gal":"L")+'</span></span></div>'+
-      '<input type="range" min="0" max="'+maxDisp+'" step="any" value="'+fmt(dispAmt,2)+'" data-slider="distilled" '+(en?"":"disabled")+
-        ' style="background:'+sliderBG(S.batchL>0?amtGal/S.batchL:0, stockFrac)+'" aria-label="Distilled water slider">'+
-      '<div class="ends"><span>0</span><span>starting water: '+volLabel(sourceVolume())+' · distilled: '+volLabel(amtGal)+'</span></div>'+
-      '<p class="warn" data-stock-warning '+(en && amtGal > capGal ? '' : 'hidden')+'>This amount exceeds your stock.</p>'+
-    '</div>';
-  })();
-  if (!anyOwned){
-    html += '<p class="small">Nothing is in your Ingredient Drawer yet. Open it and tick what you own — salts, acids and distilled water — and they’ll appear here as sliders.</p>';
+
+    const max = sliderMax(g);
+    const cap = stockCap(g);
+    const stockFraction = max > 0 ? Math.min(1, cap / max) : 1;
+    const grid = doseGrid(S, g, Infinity);
+    const doseLabel = amountLabel(g, planned);
+    const unit = dilution ? S.unit : g.unit;
+    const displayed = dilution ? fmt(toVolumeDisplay(planned, S.unit), 6) : planned;
+    html += `<div class="addrow${enabled ? "" : " disabled"}" data-addrow="${g.id}">
+      <div class="ahead">
+        <label class="check"><input type="checkbox" data-enable="${g.id}" ${enabled ? "checked" : ""} aria-label="Enable ${g.name}">
+          <span class="aname">${g.name}</span></label>
+        <span class="anote">${g.sub}</span>
+        <label class="aamt"><input type="number" min="0" step="any" value="${displayed}"
+          data-amt="${g.id}" ${enabled ? "" : "disabled"} aria-label="${g.name} amount">
+          <span class="u">${unit}</span></label>
+      </div>
+      <input type="range" min="0" max="${grid.last}" step="1" value="${doseIndex(grid, planned)}"
+        data-slider="${g.id}" ${enabled && grid.last ? "" : "disabled"} aria-label="${g.name} slider"
+        aria-valuetext="${doseLabel}" style="background:${sliderBG(max > 0 ? Math.min(1, planned / max) : 0, stockFraction)}">
+      <div class="ends"><span>${cap === Infinity ? "Unlimited stock" : "On hand · " + amountLabel(g, cap)}</span>
+        <span>Batch maximum · ${amountLabel(g, max)}</span></div>
+      <p class="warn" data-stock-warning ${enabled && planned - cap > 1e-9 ? "" : "hidden"}>This amount exceeds your stock.</p>
+    </div>`;
+  }
+  if (!anyOwned && S.start.chlorType === "none") {
+    html += '<p class="small">Select ingredients in the drawer to add them to this batch.</p>';
   }
   $("addsList").innerHTML = html;
   const count = INGREDIENTS.filter(g => S.drawer[g.id]?.owned).length;
@@ -253,7 +238,7 @@ function amountLabel(g, amount) {
 function diagnosticText(check) {
   if (check.difference === null || check.difference === 0) return check.status;
   const unit = check.key === "pH" ? "pH units" : "mg/L";
-  return fmt(check.difference, 2) + " " + unit + " " + check.status;
+  return (check.difference < 0.01 ? "<0.01" : fmt(check.difference, 2)) + " " + unit + " " + check.status;
 }
 
 function renderFinal(){
@@ -269,8 +254,9 @@ function renderFinal(){
     const inR = check.status === "in range";
     html += '<div class="frow"><span class="fn">'+ion.name+'</span>'+
       '<div class="mini"><div class="shade" style="left:'+pct(t.min)+'%;width:'+(pct(t.max)-pct(t.min))+'%"></div>'+
-      '<div class="idealmark" style="left:'+pct(t.ideal)+'%"></div><div class="valmark" style="left:'+pct(v)+'%"></div></div>'+
-      '<span class="fv">'+fmt(v)+' <small class="'+(inR?"inrange":"outrange")+'">'+esc(diagnosticText(check))+'</small></span></div>';
+      '<div class="idealmark" style="left:'+pct(t.ideal)+'%"></div>'+
+      (v === null ? '' : '<div class="valmark" style="left:'+pct(v)+'%"></div>')+'</div>'+
+      '<span class="fv">'+fmt(v, 2)+' <small class="'+(inR?"inrange":"outrange")+'">'+esc(diagnosticText(check))+'</small></span></div>';
   });
   $("finalRows").innerHTML = html;
   const { chemistry, treatment } = result;
@@ -281,8 +267,8 @@ function renderFinal(){
   $("finalRatio").textContent = fin.Cl > 0 ? fmt(fin.SO4/fin.Cl,2)+" : 1" : "—";
   const items = [];
   const phCheck = statusByKey.get("pH");
-  if (phCheck && phCheck.status !== "in range") {
-    items.push({bad:true, text:"pH target · " + diagnosticText(phCheck)});
+  if (phCheck) {
+    items.push({bad:phCheck.status !== "in range", text:"pH target · " + diagnosticText(phCheck)});
   }
   if (lastSolve && !lastSolve.complete) {
     items.push({bad:false, text:"Best recipe found within the search limit. A closer recipe may exist."});
@@ -301,7 +287,11 @@ function renderFinal(){
     items.push({bad:true, text:"Shopping list · " + ingById(treatment.id).name + " · " +
       fmt(treatment.shortage, 3) + " " + treatment.unit});
   }
-  for (const shortage of shortfalls(S, INGREDIENTS)) {
+  const shortages = shortfalls(S, INGREDIENTS);
+  if (shortages.length || treatment.shortage > 0) {
+    items.unshift({bad:true, text:"Planned recipe needs more stock."});
+  }
+  for (const shortage of shortages) {
     const g = ingById(shortage.id);
     const amount = amountLabel(g, shortage.amount);
     items.push({bad:true, text:"Shopping list · " + g.name + " · " + amount});
@@ -322,7 +312,8 @@ function renderDrawer(){
     var unitLabel = g.id==="distilled" ? S.unit : g.unit;
     html += '<div class="drow"><div class="dhead">'+
       '<label class="check"><input type="checkbox" data-d-owned="'+g.id+'" '+(d.owned?"checked":"")+'><span class="dname">'+esc(g.name)+'</span></label>'+
-      '<span class="anote">'+esc(g.sub)+'</span></div>'+
+      '<span class="anote">'+esc(g.sub)+(g.inventoryOnly ? " · inventory only" : "")+'</span>'+
+      '<a class="small" aria-label="'+esc(g.name)+' reference" href="'+g.source+'" target="_blank" rel="noopener">Reference</a></div>'+
       (d.owned ? '<div class="dstock"><label class="lbl">On hand <input type="number" min="0" step="any" value="'+(g.id === "distilled" ? fmt(toVolumeDisplay(d.stock, S.unit), 4) : d.stock)+'" data-d-stock="'+g.id+'" '+(d.unlimited?"disabled":"")+'></label>'+
         '<span class="small">'+unitLabel+'</span>'+
         '<label class="check" style="font-weight:550"><input type="checkbox" data-d-unlim="'+g.id+'" '+(d.unlimited?"checked":"")+'> Unlimited</label></div>' : '')+
@@ -332,14 +323,15 @@ function renderDrawer(){
 }
 
 function renderAll(){
-  $("batchInput").value = fmt(toVolumeDisplay(S.batchL, S.unit),2);
+  $("batchInput").value = fmt(toVolumeDisplay(S.batchL, S.unit),6);
+  $("batchUnit").textContent = S.unit;
   $("unitGal").setAttribute("aria-pressed", S.unit==="gal" ? "true":"false");
   $("unitL").setAttribute("aria-pressed", S.unit==="L" ? "true":"false");
   $("scaleStep").value = String(S.scaleStep);
   renderStart(); renderPresetSelect(); renderTarget(); renderAdds(); renderFinal(); renderDrawer();
 }
 function refreshComputed(){
-  updateStartTiles(); renderTarget(); renderFinal(); renderAdds();
+  updateStartTiles(); renderFinal(); renderAdds();
 }
 
 /* ================= solver ================= */
@@ -449,7 +441,7 @@ function bind(){
     if (!$("drawer").classList.contains("open")) return;
     if (e.key === "Escape") closeDrawer();
     if (e.key === "Tab") {
-      const controls = [...$("drawer").querySelectorAll("button:not(:disabled), input:not(:disabled), select:not(:disabled)")];
+      const controls = [...$("drawer").querySelectorAll("button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href]")];
       if (e.shiftKey && document.activeElement === controls[0]) {
         e.preventDefault(); controls.at(-1).focus();
       } else if (!e.shiftKey && document.activeElement === controls.at(-1)) {
@@ -476,8 +468,13 @@ function bind(){
 
   $("batchInput").addEventListener("change", function(){
     pushUndo(false);
-    var v = parseFloat(this.value) || 0;
-    S.batchL = Math.max(gallonsToLiters(0.5), fromVolumeDisplay(v, S.unit));
+    const v = this.valueAsNumber;
+    if (!Number.isFinite(v) || v <= 0) {
+      this.value = fmt(toVolumeDisplay(S.batchL, S.unit), 6);
+      toast("Enter a batch volume greater than zero.");
+      return;
+    }
+    S.batchL = fromVolumeDisplay(v, S.unit);
     saveLS(); renderAll();
   });
   $("unitGal").addEventListener("click", function(){ if (S.unit!=="gal"){ pushUndo(false); S.unit="gal"; saveLS(); renderAll(); } });
@@ -487,128 +484,131 @@ function bind(){
   });
 
   /* starting water */
-  $("startIons").addEventListener("input", function(e){
-    var ion = e.target.getAttribute("data-ion");
-    if (ion){ pushUndo(true); S.start.assumed = false; S.start[ion] = e.target.value === "" ? null : Math.max(0, Number(e.target.value)); S.startName = "Custom"; $("startNameTag").textContent = "Custom"; saveLS(); updateStartTiles(); renderTarget(); renderFinal(); return; }
-    if (e.target.id === "start-pH"){ pushUndo(true); S.start.assumed = false; S.start.pH = e.target.value === "" ? null : Math.min(10, Math.max(3, Number(e.target.value))); saveLS(); renderFinal(); }
-  });
-  $("chlorPpm").addEventListener("change", function(){ pushUndo(false); S.start.chlorine = this.value === "" ? null : Math.max(0, Number(this.value)); saveLS(); refreshComputed(); });
-  $("chlorType").addEventListener("change", function(){ pushUndo(false); S.start.chlorType = this.value; saveLS(); renderStart(); refreshComputed(); });
-  $("chlorBasis").addEventListener("change", function(){
-    pushUndo(false); S.start.chlorBasis = this.value || null; saveLS(); refreshComputed();
-  });
-  $("saveStartBtn").addEventListener("click", function(){
-    var name = $("saveStartName").value.trim();
-    if (!name){ toast("Give the profile a name first"); return; }
-    var prof = JSON.parse(JSON.stringify(S.start));
-    var existing = -1;
-    S.savedStarts.forEach(function(p,i){ if (p.name.toLowerCase()===name.toLowerCase()) existing = i; });
-    if (existing >= 0) S.savedStarts[existing].profile = prof; else S.savedStarts.push({id:newId(), name:name, profile:prof});
-    S.startName = name;
-    $("saveStartName").value = "";
-    saveLS(); renderStart(); renderTarget(); renderFinal();
-    toast("Saved starting profile “"+name+"”");
-  });
-  $("startChips").addEventListener("click", function(e){
-    var apply = e.target.getAttribute("data-apply-start");
-    var del = e.target.getAttribute("data-del-start");
-    if (apply !== null && apply !== undefined){
-      pushUndo(false);
-      if (apply === "-1"){ S.start = {Ca:0,Mg:0,Na:0,SO4:0,Cl:0,Alk:0,pH:7,assumed:true,chlorine:0,chlorType:"none",chlorBasis:"Cl2"}; S.startName = "Distilled"; }
-      else { var p = S.savedStarts.find(p => p.id === apply); if (!p) return; S.start = JSON.parse(JSON.stringify(p.profile)); S.startName = p.name; }
-      saveLS(); renderAll();
+  function setSource(id) {
+    const record = STARTS.find(p => p.id === id) ?? S.savedStarts.find(p => "saved:" + p.id === id);
+    if (!record) return;
+    pushUndo(false);
+    S.start = structuredClone(record.profile);
+    S.startId = id;
+    S.startName = record.name;
+    saveLS(); renderStart(); refreshComputed();
+  }
+  function editReport() {
+    S.startId = "custom";
+    S.startName = "Custom";
+    saveLS(); renderStart(); refreshComputed();
+  }
+  function readReport(input, key) {
+    if (input.validity.badInput || input.value !== "" && !input.validity.valid) {
+      renderStart();
+      toast("Enter a valid water report value.");
+      return;
     }
-    if (del !== null && del !== undefined){
-      S.savedStarts = S.savedStarts.filter(p => p.id !== del); saveLS(); renderStart();
+    const value = input.value === "" ? null : input.valueAsNumber;
+    const converted = key === "Alk" && S.start.alkBasis === "HCO3" ? alkAsCaCO3(value) : value;
+    if (converted === S.start[key]) return;
+    pushUndo(false);
+    S.start[key] = converted;
+    editReport();
+  }
+  $("sourceSelect").addEventListener("change", event => setSource(event.target.value));
+  $("alkBasis").addEventListener("change", event => {
+    pushUndo(false);
+    S.start.alkBasis = event.target.value;
+    saveLS(); renderStart();
+  });
+  $("startIons").addEventListener("change", event => readReport(event.target, event.target.dataset.report));
+  $("chlorPpm").addEventListener("change", event => readReport(event.target, "chlorine"));
+  $("chlorType").addEventListener("change", event => {
+    pushUndo(false);
+    S.start.chlorType = event.target.value;
+    editReport();
+  });
+  $("chlorBasis").addEventListener("change", event => {
+    pushUndo(false);
+    S.start.chlorBasis = event.target.value || null;
+    editReport();
+  });
+  $("saveStartBtn").addEventListener("click", () => {
+    const input = $("saveStartName");
+    const name = input.value.trim();
+    if (!name) { toast("Give the profile a name first."); return; }
+    pushUndo(false);
+    const existing = S.savedStarts.find(p => p.name.toLowerCase() === name.toLowerCase());
+    const profile = structuredClone(S.start);
+    if (existing) existing.profile = profile;
+    else S.savedStarts.push({ id: newId(), name, profile });
+    const record = existing ?? S.savedStarts.at(-1);
+    S.startId = "saved:" + record.id;
+    S.startName = record.name;
+    input.value = "";
+    saveLS(); renderStart(); refreshComputed();
+  });
+  $("startChips").addEventListener("click", event => {
+    const { applyStart, delStart } = event.target.dataset;
+    if (applyStart) setSource("saved:" + applyStart);
+    if (delStart) {
+      pushUndo(false);
+      S.savedStarts = S.savedStarts.filter(p => p.id !== delStart);
+      if (S.startId === "saved:" + delStart) editReport();
+      else { saveLS(); renderStart(); }
     }
   });
 
   /* target */
-  $("presetSel").addEventListener("change", function(){
-    var v = this.value;
-    if (v === "__customised"){ S.targetPreset = v; renderPresetSelect(); return; }
+  function setTarget(id) {
+    const preset = presetById(id) ?? S.customPresets.find(p => "custom:" + p.id === id);
+    if (!preset) return;
     pushUndo(false);
-    var p = v.indexOf("custom:") === 0 ? S.customPresets.find(p => p.id === v.slice(7)) : presetById(v);
-    if (!p) return;
-    S.targetPreset = v;
-    S.target = JSON.parse(JSON.stringify(p.target));
+    S.targetPreset = id;
+    S.target = structuredClone(preset.target);
     saveLS(); renderPresetSelect(); renderTarget(); renderFinal();
-  });
-  $("savePresetBtn").addEventListener("click", function(){
-    var name = $("savePresetName").value.trim();
-    if (!name){ toast("Give the preset a name first"); return; }
+  }
+  $("presetSel").addEventListener("change", event => setTarget(event.target.value));
+  $("savePresetBtn").addEventListener("click", () => {
+    const name = $("savePresetName").value.trim();
+    if (!name) { toast("Give the target a name first."); return; }
+    pushUndo(false);
     const id = newId();
-    S.customPresets.push({id, name:name, kind:"Custom", blurb: $("savePresetNote").value.trim() || "Your own saved target profile.", target: JSON.parse(JSON.stringify(S.target))});
+    S.customPresets.push({ id, name, kind: "Custom", blurb: $("savePresetNote").value.trim(), target: structuredClone(S.target) });
     S.targetPreset = "custom:" + id;
     $("savePresetName").value = ""; $("savePresetNote").value = "";
     saveLS(); renderPresetSelect();
-    toast("Saved preset “"+name+"”");
   });
-  $("presetChips").addEventListener("click", function(e){
-    var apply = e.target.getAttribute("data-apply-preset");
-    var del = e.target.getAttribute("data-del-preset");
-    if (apply !== null && apply !== undefined){
+  $("presetChips").addEventListener("click", event => {
+    const { applyPreset, delPreset } = event.target.dataset;
+    if (applyPreset) setTarget("custom:" + applyPreset);
+    if (delPreset) {
       pushUndo(false);
-      var p = S.customPresets.find(p => p.id === apply); if (!p) return;
-      S.targetPreset = "custom:" + apply;
-      S.target = JSON.parse(JSON.stringify(p.target));
-      saveLS(); renderPresetSelect(); renderTarget(); renderFinal();
-    }
-    if (del !== null && del !== undefined){
-      S.customPresets = S.customPresets.filter(p => p.id !== del);
-      if (S.targetPreset === "custom:" + del) S.targetPreset = "__customised";
+      S.customPresets = S.customPresets.filter(p => p.id !== delPreset);
+      if (S.targetPreset === "custom:" + delPreset) S.targetPreset = "__customised";
       saveLS(); renderPresetSelect();
     }
   });
-  $("targetRows").addEventListener("input", function(e){
-    var t = e.target, ion, v;
-    /* During a drag, update the row in place — a full re-render would
-       destroy the slider thumb being dragged. Full render happens on change. */
-    function localSync(row, ionId){
-      var tg = S.target[ionId], ceil = ionById(ionId).ceil;
-      var pct = function(x){ return Math.max(0, Math.min(100, x/ceil*100)); };
-      var shade = row.querySelector(".shade");
-      if (shade){ shade.style.left = pct(tg.min)+"%"; shade.style.width = (pct(tg.max)-pct(tg.min))+"%"; }
-      var im = row.querySelector(".idealmark");
-      if (im) im.style.left = pct(tg.ideal)+"%";
-      var mn = row.querySelector("[data-tminn]"), mx = row.querySelector("[data-tmaxn]");
-      if (mn) mn.value = tg.min; if (mx) mx.value = tg.max;
-      var is = row.querySelector("[data-tideal]"), isn = row.querySelector("[data-tidealn]");
-      if (is) is.value = tg.ideal; if (isn) isn.value = tg.ideal;
-    }
-    function markCustom(){
-      if (S.targetPreset !== "__customised"){ S.targetPreset = "__customised"; renderPresetSelect(); }
-    }
-    if ((ion = t.getAttribute("data-tmin")) || (ion = t.getAttribute("data-tmax"))){
-      pushUndo(true);
-      var key = t.hasAttribute("data-tmin") ? "min" : "max";
-      S.target[ion][key] = Math.max(0, parseFloat(t.value)||0);
-      if (S.target[ion].min > S.target[ion].max){ if (key==="min") S.target[ion].max = S.target[ion].min; else S.target[ion].min = S.target[ion].max; }
-      S.target[ion].ideal = Math.max(S.target[ion].min, Math.min(S.target[ion].max, S.target[ion].ideal));
-      markCustom(); saveLS();
-      localSync(t.closest(".trow"), ion); renderFinal();
-    }
-    else if ((ion = t.getAttribute("data-tideal"))){
-      pushUndo(true);
-      S.target[ion].ideal = Math.max(0, parseFloat(t.value)||0);
-      markCustom(); saveLS();
-      localSync(t.closest(".trow"), ion); renderFinal();
-    }
+  function commitTargetEdit() {
+    S.targetPreset = "__customised";
+    saveLS(); renderPresetSelect(); renderTarget(); renderFinal();
+  }
+  $("pHTargetEnabled").addEventListener("change", event => {
+    pushUndo(false);
+    S.target.pH = event.target.checked ? { min: 5.5, ideal: 6, max: 7 } : null;
+    commitTargetEdit();
   });
-  $("targetRows").addEventListener("change", function(e){
-    var t = e.target, ion;
-    if (t.hasAttribute("data-tmin") || t.hasAttribute("data-tmax") || t.hasAttribute("data-tideal")){
-      renderTarget(); renderFinal(); return;
+  $("targetRows").addEventListener("change", event => {
+    const input = event.target;
+    const { targetKey, targetBound } = input.dataset;
+    if (!targetKey) return;
+    const value = input.valueAsNumber;
+    const range = { ...S.target[targetKey], [targetBound]: value };
+    if (!input.validity.valid || !Number.isFinite(value) || range.min > range.ideal || range.ideal > range.max) {
+      input.value = fmt(S.target[targetKey][targetBound], 5);
+      toast("Enter a valid range with minimum ≤ preferred ≤ maximum.");
+      return;
     }
-    if ((ion = t.getAttribute("data-tminn")) || (ion = t.getAttribute("data-tmaxn")) || (ion = t.getAttribute("data-tidealn"))){
-      pushUndo(false);
-      var key = t.hasAttribute("data-tminn") ? "min" : (t.hasAttribute("data-tmaxn") ? "max" : "ideal");
-      S.target[ion][key] = Math.max(0, parseFloat(t.value)||0);
-      if (S.target[ion].min > S.target[ion].max){ if (key==="min") S.target[ion].max = S.target[ion].min; else S.target[ion].min = S.target[ion].max; }
-      S.target[ion].ideal = Math.max(S.target[ion].min, Math.min(S.target[ion].max, S.target[ion].ideal));
-      if (S.targetPreset !== "__customised"){ S.targetPreset = "__customised"; renderPresetSelect(); }
-      saveLS(); renderTarget(); renderFinal();
-    }
+    if (value === S.target[targetKey][targetBound]) return;
+    pushUndo(false);
+    S.target[targetKey] = range;
+    commitTargetEdit();
   });
 
   /* additions */
@@ -616,6 +616,7 @@ function bind(){
   const list = $("addsList");
   function rawDose(input, id) {
     const value = Math.max(0, Number(input.value));
+    if (input.dataset.slider) return doseAt(doseGrid(S, ingById(id), Infinity), value);
     return id === "distilled" ? fromVolumeDisplay(value, S.unit) : value;
   }
   list.addEventListener("input", event => {
@@ -630,12 +631,13 @@ function bind(){
     const amount = configPreviewDose(g, rawDose(input, id));
     S.adds[id] = amount;
     const row = input.closest(".addrow");
-    row.querySelector("[data-amt]").value = id === "distilled" ? toVolumeDisplay(amount, S.unit) : amount;
+    row.querySelector("[data-amt]").value = id === "distilled" ? fmt(toVolumeDisplay(amount, S.unit), 6) : amount;
+    input.setAttribute("aria-valuetext", amountLabel(g, amount));
     row.querySelector("[data-stock-warning]").hidden = rawDose(input, id) <= stockCap(g);
     input.style.background = sliderBG(amount / sliderMax(g), Math.min(1, stockCap(g) / sliderMax(g)));
     const treatment = list.querySelector("[data-treatment]");
     if (treatment) treatment.textContent = treatmentText(dechlorination(S, sourceVolume()));
-    updateStartTiles(); renderTarget(); renderFinal();
+    updateStartTiles(); renderFinal();
   });
   function configPreviewDose(g, amount) {
     return snapDose(S, g, amount, Infinity);

@@ -2,70 +2,85 @@ import { INGREDIENTS } from './catalog.js';
 import { alkAsCaCO3, gallonsToLiters } from './units.js';
 
 export const IONS = [
-  {id:"Ca",  name:"Calcium",      sym:"Ca²⁺",  ceil:300},
-  {id:"Mg",  name:"Magnesium",    sym:"Mg²⁺",  ceil:100},
-  {id:"Na",  name:"Sodium",       sym:"Na⁺",   ceil:250},
-  {id:"SO4", name:"Sulfate",      sym:"SO₄²⁻", ceil:800},
-  {id:"Cl",  name:"Chloride",     sym:"Cl⁻",   ceil:350},
-  {id:"Alk", name:"Alkalinity", sym:"as CaCO₃", ceil:330}
+  { id: 'Ca', name: 'Calcium', sym: 'Ca²⁺', ceil: 300 },
+  { id: 'Mg', name: 'Magnesium', sym: 'Mg²⁺', ceil: 100 },
+  { id: 'Na', name: 'Sodium', sym: 'Na⁺', ceil: 250 },
+  { id: 'SO4', name: 'Sulfate', sym: 'SO₄²⁻', ceil: 800 },
+  { id: 'Cl', name: 'Chloride', sym: 'Cl⁻', ceil: 350 },
+  { id: 'Alk', name: 'Alkalinity', sym: 'as CaCO₃', ceil: 330 }
 ];
-export function ionById(id){ for (var i=0;i<IONS.length;i++) if (IONS[i].id===id) return IONS[i]; return null; }
 
-function T(ca,mg,na,so4,cl,hco3){
-  function r(a){ return {min:a[0], max:a[1], ideal:a[2]}; }
-  return {Ca:r(ca), Mg:r(mg), Na:r(na), SO4:r(so4), Cl:r(cl), Alk:r(hco3.map(alkAsCaCO3)), pH:null};
-}
+const brewingReference = 'https://www.brunwater.com/water-knowledge';
+const burtonReference = 'https://www.cyberlibrary.org/en/books/cooley-s-cyclop-dia-of-practical-receipts-and-collateral-inform-4dfe3dab/chapters/83/';
+const records = (ranges, bicarbonate = false) => ({
+  ...Object.fromEntries(IONS.map(({ id }, index) => {
+    const [min, ideal, max] = ranges[index];
+    const convert = id === 'Alk' && bicarbonate ? alkAsCaCO3 : value => value;
+    return [id, { min: convert(min), ideal: convert(ideal), max: convert(max) }];
+  })),
+  pH: null
+});
+
+const style = (id, name, blurb, ranges) =>
+  ({ id, name, kind: 'Style', blurb, source: brewingReference, target: records(ranges) });
+
+const historic = (id, name, blurb, nominal, bicarbonate = false, source = brewingReference) => ({
+  id, name, kind: 'Historical', blurb, source,
+  target: records(nominal.map(n => [Math.floor(n * 0.85), n, Math.ceil(n * 1.15)]), bicarbonate)
+});
+
 export const PRESETS = [
-  {id:"pilsner", name:"Pilsner", kind:"Style",
-   blurb:"Soft and low in everything, echoing Pilsen’s famously soft water. Low alkalinity and modest sulfate keep the finish crisp and let delicate noble hops show without harshness.",
-   target:T([20,60,35],[0,15,8],[0,25,10],[10,60,30],[15,60,35],[0,60,30])},
-  {id:"pale-ale", name:"Pale Ale", kind:"Style",
-   blurb:"A balanced all-rounder: firm calcium for yeast health and clarity, sulfate ahead of chloride for a drier, hoppier edge, and low alkalinity so the malt doesn’t taste chalky.",
-   target:T([50,100,75],[0,20,10],[0,40,15],[100,200,150],[40,90,60],[0,120,60])},
-  {id:"ipa", name:"IPA", kind:"Style",
-   blurb:"Sulfate pushed high (200–350 ppm) to dry the finish and sharpen hop bitterness and aroma, with chloride kept moderate so the beer stays lean rather than juicy-soft.",
-   target:T([75,150,100],[0,25,12],[0,40,15],[200,350,250],[50,100,75],[0,100,50])},
-  {id:"stout", name:"Stout", kind:"Style",
-   blurb:"Higher alkalinity buffers the acidity of dark roasted malts, and balanced sulfate/chloride keeps the body full and smooth rather than thin or harsh.",
-   target:T([50,100,75],[0,25,12],[0,50,25],[40,110,75],[40,110,75],[100,200,150])},
-  {id:"porter", name:"Porter", kind:"Style",
-   blurb:"Like the stout profile but a touch softer: moderate alkalinity for the chocolate and brown malts, with chloride roughly matching sulfate for a rounded, malty palate.",
-   target:T([40,90,60],[0,20,10],[0,45,20],[35,90,60],[35,90,60],[80,170,120])},
-  {id:"wheat", name:"Wheat Beer", kind:"Style",
-   blurb:"Gentle and neutral — low sulfate so noble hops and wheat softness stay in front, moderate alkalinity, nothing that would push flavours around.",
-   target:T([30,80,50],[0,20,10],[0,30,10],[30,90,60],[30,90,60],[40,130,80])},
-  {id:"burton", name:"Burton-on-Trent", kind:"Historical",
-   blurb:"The water that made pale ale famous: wells in Burton drew through gypsum beds, loading the water with calcium and sulfate. The result is a very dry, firm bitterness — the benchmark hoppy profile, and strong enough to taste on its own.",
-   target:T([200,300,270],[30,60,45],[25,100,55],[500,800,650],[10,60,35],[120,280,200])},
-  {id:"dublin", name:"Dublin", kind:"Historical",
-   blurb:"High bicarbonate from limestone country — the classic stout water. Its alkalinity is exactly what a grist full of acidic roast barley needs to land at a drinkable mash acidity.",
-   target:T([90,150,120],[0,15,5],[0,30,12],[30,80,55],[5,35,19],[200,320,260])},
-  {id:"munich", name:"Munich", kind:"Historical",
-   blurb:"Moderate calcium with high alkalinity and almost no sulfate or chloride — water for dark lagers, where the alkalinity suits dark malts and the softness keeps lagers smooth.",
-   target:T([50,100,75],[10,30,18],[0,10,2],[0,25,10],[0,10,2],[100,200,150])},
-  {id:"vienna", name:"Vienna", kind:"Historical",
-   blurb:"Hard and alkaline like Munich but with far more magnesium and some sulfate — the water behind amber Vienna lagers, firm enough to keep the malt sweetness from turning flabby.",
-   target:T([120,200,160],[40,80,60],[0,20,8],[80,170,125],[0,30,12],[180,300,240])}
+  style('pilsner', 'Pilsner', 'A soft, low-alkalinity starting point for a crisp pale lager.',
+    [[20,35,50],[0,5,10],[0,5,15],[0,25,50],[10,30,55],[0,20,40]]),
+  style('pale-ale', 'Pale Ale', 'Moderate calcium and a sulfate-forward balance for a dry finish.',
+    [[50,75,100],[0,10,20],[0,15,40],[100,150,200],[30,50,75],[0,35,60]]),
+  style('ipa', 'IPA', 'A sulfate-forward profile for a dry, hop-led IPA.',
+    [[50,85,120],[0,10,20],[0,15,40],[200,250,350],[25,45,65],[0,30,60]]),
+  style('stout', 'Stout', 'A starting range for a roast-heavy grist with enough acidity to use the added alkalinity.',
+    [[50,75,100],[0,12,25],[0,25,50],[40,75,110],[40,75,100],[80,120,165]]),
+  style('porter', 'Porter', 'Moderate alkalinity for dark malts and similar sulfate and chloride levels.',
+    [[40,60,90],[0,10,20],[0,20,45],[35,60,90],[35,60,90],[60,95,140]]),
+  style('wheat', 'Wheat Beer', 'A gently mineralized profile with moderate chloride and sulfate.',
+    [[30,50,80],[0,10,20],[0,10,30],[25,45,75],[30,50,75],[0,35,65]]),
+  historic('burton', 'Burton-on-Trent', 'Allsopp brewery well analysis in Cooley’s Cyclopædia, converted from grains per imperial gallon. High sulfate reflects the local gypsum.',
+    [168,36,57,364,88,250], false, burtonReference),
+  historic('dublin', 'Dublin', 'Brungard’s hard-water Dublin profile. Wells and Wicklow-supplied water differ considerably.',
+    [120,4,12,55,19,315], true),
+  historic('munich', 'Munich', 'Brungard’s Munich profile has low sulfate and chloride with substantial alkalinity.',
+    [77,17,4,18,8,295], true),
+  historic('vienna', 'Vienna', 'Brungard’s Vienna profile has moderate sulfate and substantial alkalinity.',
+    [75,15,10,60,15,225], true)
 ];
-export function presetById(id){ for (var i=0;i<PRESETS.length;i++) if (PRESETS[i].id===id) return PRESETS[i]; return null; }
 
-/* ================= state ================= */
-function defaultDrawer(){
-  return Object.fromEntries(INGREDIENTS.map(g => [g.id, { owned:true, unlimited:true, stock:0 }]));
-}
-export function defaultState(){
-  var p = presetById("pale-ale");
-  var s = {
-    unit:"gal", batchL:gallonsToLiters(5), scaleStep:0.1,
-    startName:"Distilled",
-    start:{Ca:0,Mg:0,Na:0,SO4:0,Cl:0,Alk:0,pH:7,assumed:true,chlorine:0,chlorType:"none",chlorBasis:"Cl2"},
-    targetPreset:"pale-ale",
-    target: JSON.parse(JSON.stringify(p.target)),
-    adds:{}, enabled:{},
-    dechlor:{mode:"kmeta", rateMgGal:null, enabled:true, assayPercent:100, campdenMg:null},
-    drawer: defaultDrawer(),
-    savedStarts:[], customPresets:[]
+export const presetById = id => PRESETS.find(preset => preset.id === id);
+
+const pure = { Ca: 0, Mg: 0, Na: 0, SO4: 0, Cl: 0, Alk: 0, pH: 7 };
+const source = (id, name, profile, description, reference) => ({
+  id, name, description, reference,
+  profile: { chlorType: 'none', chlorine: 0, chlorBasis: 'Cl2', alkBasis: 'CaCO3',
+    assumed: id !== 'custom', ...profile }
+});
+export const STARTS = [
+  source('distilled', 'Distilled', pure, 'Assumes zero reported minerals and neutral pH.'),
+  source('ro', 'Reverse osmosis (estimate)', { Ca: 2, Mg: 0.5, Na: 3, SO4: 2, Cl: 4, Alk: 5, pH: 7 },
+    'Editable estimates for low-mineral, unmineralized RO water. Use your report when available.',
+    'https://www.epa.gov/system/files/documents/2025-01/ws-products-home-water-treatment-guide_v2_508.pdf'),
+  source('spring', 'Bottled spring water (example)', { Ca: 67, Mg: 7.2, Na: 2.5, SO4: 9.1, Cl: 3, Alk: 190, pH: 7.3 },
+    'Mountain Valley Spring 1, January 2023. Uses the midpoint of the reported pH interval.',
+    'https://a-us.storyblok.com/f/1021132/x/c8dddc1da5/mountainvalley-spring-water-2023-water-quality-report.pdf'),
+  source('custom', 'Water report', { ...Object.fromEntries(IONS.map(({ id }) => [id, null])), pH: null, chlorine: null },
+    'Leave unreported measurements blank.')
+];
+
+export function defaultState() {
+  return {
+    unit: 'gal', batchL: gallonsToLiters(5), scaleStep: 0.1,
+    startId: 'distilled', startName: 'Distilled', start: structuredClone(STARTS[0].profile),
+    targetPreset: 'pale-ale', target: structuredClone(presetById('pale-ale').target),
+    adds: Object.fromEntries(INGREDIENTS.map(g => [g.id, 0])),
+    enabled: Object.fromEntries(INGREDIENTS.map(g => [g.id, true])),
+    dechlor: { mode: 'kmeta', rateMgGal: null, enabled: true, assayPercent: 100, campdenMg: null },
+    drawer: Object.fromEntries(INGREDIENTS.map(g => [g.id, { owned: true, unlimited: true, stock: 0 }])),
+    savedStarts: [], customPresets: []
   };
-  INGREDIENTS.forEach(function(g){ s.adds[g.id]=0; s.enabled[g.id]=true; });
-  return s;
 }

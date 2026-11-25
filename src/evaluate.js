@@ -8,8 +8,12 @@ export function effectiveDose(state, id) {
   return state.enabled[id] ? state.adds[id] ?? 0 : 0;
 }
 
+export function usesDilution(state) {
+  return state.startId !== 'distilled';
+}
+
 export function mixVolumes(state) {
-  const dilutionL = Math.min(state.batchL, Math.max(0, effectiveDose(state, 'distilled')));
+  const dilutionL = usesDilution(state) ? Math.min(state.batchL, Math.max(0, effectiveDose(state, 'distilled'))) : 0;
   return { batchL: state.batchL, sourceL: state.batchL - dilutionL, dilutionL };
 }
 

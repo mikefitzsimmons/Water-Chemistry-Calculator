@@ -1,6 +1,6 @@
 import { INGREDIENTS } from './catalog.js';
-import { evaluate, PROFILE_KEYS } from './evaluate.js';
-import { doseAt, doseGrid, doseMaximum, stockCap } from './inventory.js';
+import { evaluate, PROFILE_KEYS, usesDilution } from './evaluate.js';
+import { doseAt, doseGrid, doseIndex, doseMaximum, stockCap } from './inventory.js';
 
 const SCALES = { Ca: 50, Mg: 15, Na: 25, SO4: 100, Cl: 50, Alk: 50, pH: 0.5 };
 const TOLERANCE = 1e-10;
@@ -57,13 +57,7 @@ function compare(a, b) {
 }
 
 const adjustable = (state, g) => state.enabled[g.id] && !g.inventoryOnly &&
-  (g.mass || g.id === 'distilled' && state.startId !== 'distilled');
-
-function nearestIndex(grid, desired) {
-  const index = Math.max(0, Math.min(grid.count, Math.round(desired / grid.step)));
-  return grid.fullBatch !== null && Math.abs(desired - grid.fullBatch) < Math.abs(desired - doseAt(grid, index))
-    ? grid.last : index;
-}
+  (g.mass || g.id === 'distilled' && usesDilution(state));
 
 function boundedSearch(state, ingredients, exactLimit, searchLimit) {
   const entries = targets(state.target);
@@ -71,6 +65,7 @@ function boundedSearch(state, ingredients, exactLimit, searchLimit) {
   const working = { ...state, adds: { ...state.adds } };
   const dimensions = [];
   for (const g of ingredients) {
+    if (g.inventoryOnly && state.enabled[g.id]) working.adds[g.id] = 0;
     if (!adjustable(state, g)) continue;
     const grid = doseGrid(state, g);
     working.adds[g.id] = 0;
@@ -112,7 +107,7 @@ function boundedSearch(state, ingredients, exactLimit, searchLimit) {
       }
     }
   } else {
-    const prior = dimensions.map(({ id, grid }) => nearestIndex(grid, state.adds[id] ?? 0));
+    const prior = dimensions.map(({ id, grid }) => doseIndex(grid, state.adds[id] ?? 0));
     const dilution = dimensions.findIndex(({ id }) => id === 'distilled');
     const allDistilled = zero.map((value, i) => i === dilution ? maxima[i] : value);
     const middle = maxima.map(max => Math.round(max / 3));

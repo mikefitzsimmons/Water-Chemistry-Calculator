@@ -2,7 +2,7 @@ import { alkAsCaCO3, gallonsToLiters } from './units.js';
 
 export const LEGACY_KEY = 'wcStaticV1';
 export const STORAGE_KEY = 'wcStaticV2';
-export const VERSION = 6;
+export const VERSION = 7;
 
 export const newId = () => crypto.randomUUID();
 
@@ -15,22 +15,23 @@ const targetKeys = profileKeys;
 
 function validProfile(value) {
   return object(value) && profileKeys.every(key => nullable(value[key], quantity)) &&
-    typeof value.assumed === 'boolean' && nullable(value.pH, n => quantity(n) && n <= 14) && nullable(value.chlorine, quantity) &&
+    ['CaCO3', 'HCO3'].includes(value.alkBasis) && typeof value.assumed === 'boolean' && nullable(value.pH, n => quantity(n) && n <= 14) && nullable(value.chlorine, quantity) &&
     ['none', 'chlorine', 'chloramine'].includes(value.chlorType) && ['Cl2', 'compound', null].includes(value.chlorBasis);
 }
 
 function validTarget(value) {
-  return object(value) && [...targetKeys, 'pH'].every(key => {
+  const keys = [...targetKeys, 'pH'];
+  return object(value) && Object.keys(value).every(key => keys.includes(key)) && keys.every(key => {
     if (key === 'pH' && value[key] === null) return true;
     const r = value[key];
-    return object(r) && [r.min, r.ideal, r.max].every(quantity) &&
+    return object(r) && [r.min, r.ideal, r.max].every(key === 'Alk' ? Number.isFinite : quantity) &&
       (key !== 'pH' || r.max <= 14) && r.min <= r.ideal && r.ideal <= r.max;
   });
 }
 
 function validRecords(records, valid) {
   return Array.isArray(records) && records.every(entry =>
-    object(entry) && /^[\w-]+$/.test(entry.id ?? '') && text(entry.name) && entry.name.trim() && valid(entry)
+    object(entry) && text(entry.id) && /^[\w-]+$/.test(entry.id) && text(entry.name) && entry.name.trim() && valid(entry)
   ) && new Set(records.map(entry => entry.id)).size === records.length;
 }
 
@@ -38,7 +39,9 @@ function validate(state, defaults) {
   const keys = Object.keys(defaults.drawer);
   if (!(object(state) && ['gal', 'L'].includes(state.unit) && quantity(state.batchL) && state.batchL > 0 &&
     [0.01, 0.05, 0.1, 0.5, 1].includes(state.scaleStep) && text(state.startName) &&
-    validProfile(state.start) && text(state.targetPreset) && validTarget(state.target) &&
+    text(state.startId) && validProfile(state.start) &&
+    (['distilled', 'ro', 'spring', 'custom'].includes(state.startId) ||
+      Array.isArray(state.savedStarts) && state.savedStarts.some(entry => 'saved:' + entry?.id === state.startId)) && text(state.targetPreset) && validTarget(state.target) &&
     validRecords(state.savedStarts, entry => validProfile(entry.profile)) &&
     validRecords(state.customPresets, entry => validTarget(entry.target) && text(entry.blurb)) &&
     (!state.targetPreset.startsWith('custom:') ||
@@ -63,7 +66,8 @@ function legacyProfile(value) {
     assumed: value.assumed ?? false,
     chlorine: value.chlorine ?? null,
     chlorType: value.chlorType ?? 'none',
-    chlorBasis: 'Cl2'
+    chlorBasis: 'Cl2',
+    alkBasis: 'HCO3'
   };
 }
 
@@ -116,6 +120,16 @@ function legacyDrawer(defaults) {
   ]));
 }
 
+function convertSourceSelection(state) {
+  const saved = state.savedStarts.find(entry => entry.name === state.startName);
+  const allZero = profileKeys.every(key => state.start[key] === 0);
+  state.startId = saved ? 'saved:' + saved.id
+    : state.startName === 'Distilled' && allZero && state.start.chlorType === 'none' ? 'distilled' : 'custom';
+  state.start.alkBasis ??= 'HCO3';
+  for (const entry of state.savedStarts) entry.profile.alkBasis ??= 'HCO3';
+  return state;
+}
+
 export function migrateLegacy(record, defaults) {
   if (!object(record)) throw new Error('The prototype save is invalid.');
   record = convertVolumes(record);
@@ -138,7 +152,7 @@ export function migrateLegacy(record, defaults) {
     state.targetPreset = entry ? 'custom:' + entry.id : '__customised';
   }
   if (record.drawer?.kmeta) state.drawer.kmeta.stock *= 1000;
-  return validate(convertForms(state, defaults), defaults);
+  return validate(convertSourceSelection(convertForms(state, defaults)), defaults);
 }
 
 export function encodeBackup(state) {
@@ -147,10 +161,10 @@ export function encodeBackup(state) {
 
 export function decodeBackup(raw, defaults) {
   const record = JSON.parse(raw);
-  if (!object(record) || ![2, 3, 4, 5, VERSION].includes(record.version)) throw new Error('This backup version is unsupported.');
+  if (!object(record) || ![2, 3, 4, 5, 6, VERSION].includes(record.version)) throw new Error('This backup version is unsupported.');
   if (record.version === VERSION) return validate(record.data, defaults);
   const state = record.version === 2 ? convertVolumes(record.data) : record.data;
-  const converted = record.version === 5 ? state : {
+  const converted = record.version >= 5 ? state : {
     ...state,
     start: { ...legacyProfile(state.start), assumed: state.startName === 'Distilled' },
     target: legacyTarget(state.target),
@@ -162,7 +176,7 @@ export function decodeBackup(raw, defaults) {
     for (const saved of converted.savedStarts) saved.profile.chlorBasis = 'Cl2';
   }
   converted.dechlor = { ...defaults.dechlor, ...converted.dechlor };
-  return validate(convertForms(converted, defaults), defaults);
+  return validate(convertSourceSelection(convertForms(converted, defaults)), defaults);
 }
 
 export function writeSave(getStorage, state) {
