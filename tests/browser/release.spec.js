@@ -94,7 +94,10 @@ test('explains a stock-limited miss alongside an unevaluated pH goal', async ({ 
   await page.locator('#solveBtn').click();
   await expect(page.locator('#solveStatus')).toHaveText('Additions calculated.');
   await expect(page.locator('[data-amt="gypsum"]')).toHaveValue('0.2');
-  await expect(page.locator('#finalNotes')).toContainText('pH target · unevaluated');
-  await expect(page.locator('#finalNotes')).toContainText(/Sulfate with more stock.*low → in range/);
-  await expect(page.locator('#finalNotes')).toContainText(/Buying .* g of Gypsum/);
+  await expect(page.locator('[data-result-key="pH"]')).toContainText('unevaluated');
+  await expect(page.locator('[data-result-key="pH"] button')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Ways to raise sulfate' }).click();
+  const gypsumOption = page.locator('#stock-options-SO4 li').filter({ hasText: 'Gypsum' }).first();
+  await expect(gypsumOption).toContainText(/Buy .* g/);
+  await expect(gypsumOption).toContainText('and be in range');
 });

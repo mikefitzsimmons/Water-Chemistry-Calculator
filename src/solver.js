@@ -22,27 +22,29 @@ export function diagnose(result, target) {
   });
 }
 
-function distance(result, entries) {
+function distance(result, entries, priority) {
   const measured = values(result);
   let range = 0;
   let preferred = 0;
+  let protectedLoss = 0;
+  let targetLoss = 0;
   for (const [key, target] of entries) {
     const value = measured[key];
-    if (value == null) {
-      range += 1;
-      continue;
-    }
     const scale = SCALES[key] ?? 1;
-    const miss = Math.max(0, target.min - value, value - target.max);
-    range += (miss / scale) ** 2;
-    preferred += ((value - target.ideal) / scale) ** 2;
+    const miss = value == null ? 1 : (Math.max(0, target.min - value, value - target.max) / scale) ** 2;
+    range += miss;
+    if (priority?.protectedKeys.has(key)) protectedLoss += miss;
+    if (priority?.key === key) targetLoss = miss;
+    if (value != null) preferred += ((value - target.ideal) / scale) ** 2;
   }
-  return { range, preferred };
+  return { range, preferred, protectedLoss, targetLoss };
 }
 
 function compareDistance(a, b) {
-  const range = a.range - b.range;
-  if (Math.abs(range) > TOLERANCE) return range;
+  for (const key of ['protectedLoss', 'targetLoss', 'range']) {
+    const difference = a[key] - b[key];
+    if (Math.abs(difference) > TOLERANCE) return difference;
+  }
   return a.preferred - b.preferred;
 }
 
@@ -60,7 +62,7 @@ function compare(a, b) {
 const adjustable = (state, g) => !g.inventoryOnly &&
   (g.mass || g.id === 'distilled' && usesDilution(state));
 
-function boundedSearch(state, ingredients, exactLimit, searchLimit) {
+function boundedSearch(state, ingredients, exactLimit, searchLimit, priority) {
   const entries = targets(state.target);
   const includePH = entries.some(([key]) => key === 'pH');
   const working = { ...state, adds: { ...state.adds } };
@@ -93,7 +95,7 @@ function boundedSearch(state, ingredients, exactLimit, searchLimit) {
       steps += index;
     }
     const result = evaluate(working, ingredients, PROFILE_KEYS, includePH);
-    const candidate = { ...distance(result, entries), active, steps, indices: [...indices] };
+    const candidate = { ...distance(result, entries, priority), active, steps, indices: [...indices] };
     if (!best || compare(candidate, best) < 0) best = candidate;
     return candidate;
   }
@@ -165,39 +167,142 @@ function boundedSearch(state, ingredients, exactLimit, searchLimit) {
   return { adds: working.adds, result, complete, evaluated, score: distance(result, entries) };
 }
 
-function stockComparison(state, baseline, ingredients, exactLimit, searchLimit) {
-  if (baseline.score.range <= TOLERANCE) return null;
-  const drawer = { ...state.drawer };
-  const limits = ingredients.filter(g => adjustable(state, g) && stockCap(state, g.id) < doseMaximum(state, g));
+function affectedBy(ingredient, key) {
+  if (ingredient.id === 'distilled') return PROFILE_KEYS.includes(key) || key === 'pH';
+  if (ingredient.auto) return ['SO4', 'Cl', 'Alk', 'pH'].includes(key);
+  if (ingredient.mass?.[key]) return true;
+  return (key === 'Alk' || key === 'pH') && (ingredient.base || ingredient.pKs);
+}
+
+function availableForComparison(state, ingredients) {
+  const limited = ingredients.filter(g => adjustable(state, g) && stockCap(state, g.id) < doseMaximum(state, g));
   const treatment = dechlorination(state, state.batchL);
   if (treatment.status === 'short') {
     const product = ingredients.find(g => g.id === treatment.id);
-    if (product) limits.push(product);
+    if (product) limited.push(product);
   }
-  if (!limits.length) return null;
-  for (const { id } of limits) drawer[id] = { ...drawer[id], owned: true, unlimited: true };
-  const alternate = boundedSearch({ ...state, adds: baseline.adds, drawer }, ingredients, exactLimit, searchLimit);
-  if (alternate.score.range >= baseline.score.range - TOLERANCE) return null;
-
-  const purchases = limits.flatMap(({ id }) => {
-    const dose = id === alternate.result.treatment.id ? alternate.result.treatment.applied : alternate.adds[id];
-    const amount = dose - stockCap(state, id);
-    return amount > TOLERANCE ? [{ id, amount, dose }] : [];
-  });
-  if (!purchases.length) return null;
-  return {
-    purchases,
-    diagnostics: diagnose(alternate.result, state.target),
-    rangeImprovement: baseline.score.range - alternate.score.range,
-    complete: alternate.complete
-  };
+  return limited;
 }
 
-export function solveRecipe(state, { ingredients = INGREDIENTS, exactLimit = 12000, searchLimit = 14000 } = {}) {
+const doseIn = (recipe, id) => recipe.result.treatment.id === id
+  ? recipe.result.treatment.applied : recipe.adds[id] ?? 0;
+const allInRange = checks => checks.every(check => check.status === 'in range');
+
+function adviceForStock(state, baseline, diagnostics, ingredients, exactLimit, comparisonLimit) {
+  const candidates = availableForComparison(state, ingredients);
+  const baselineChecks = new Map(diagnostics.map(check => [check.key, check]));
+  const protectedKeys = new Set(diagnostics.filter(check => check.status === 'in range').map(check => check.key));
+  const misses = diagnostics.filter(check => check.difference > 0);
+  const ranges = misses.map(check => ({ key: check.key, options: [] }));
+  const optional = [];
+  let reference = allInRange(diagnostics) ? { recipe: baseline, checks: diagnostics, purchases: [], impact: 0 } : null;
+  let remaining = comparisonLimit;
+
+  function compareWithStock(origin, recipe, products, priority, limit) {
+    const budget = Math.min(limit, remaining) - 1; // Include the final forward evaluation in the budget.
+    if (budget < 1) return null;
+    const drawer = { ...origin.drawer };
+    for (const { id } of products) drawer[id] = { ...drawer[id], owned: true, unlimited: true };
+    const alternative = boundedSearch({ ...origin, adds: recipe.adds, drawer }, ingredients,
+      Math.min(exactLimit, budget), budget, priority);
+    remaining -= alternative.evaluated + 1;
+    const purchases = products.flatMap(({ id }) => {
+      const dose = doseIn(alternative, id);
+      const amount = dose - stockCap(origin, id);
+      return amount > TOLERANCE ? [{ id, amount, dose }] : [];
+    });
+    if (!purchases.length) return null;
+    const checks = diagnose(alternative.result, state.target);
+    return { recipe: alternative, purchases, checks };
+  }
+
+  function keepRangeOption(before, options, comparison) {
+    if (!comparison) return;
+    const { recipe, purchases, checks } = comparison;
+    const after = checks.find(check => check.key === before.key);
+    if (after.difference === null || before.difference - after.difference <= TOLERANCE ||
+        checks.some(check => protectedKeys.has(check.key) && check.status !== 'in range')) return;
+    const changes = checks.filter(({ key, value }) => key !== before.key && value !== null &&
+      (baselineChecks.get(key).value === null || Math.abs(value - baselineChecks.get(key).value) >= 0.01));
+    // A fine-tuning reference should meet the ranges with minimal impact on the
+    // values already in range, so the correction stays distinct from optional tuning.
+    const impact = changes.reduce((sum, { key, value }) => protectedKeys.has(key)
+      ? sum + Math.abs(value - baselineChecks.get(key).value) / (SCALES[key] ?? 1) : sum, 0);
+    if (allInRange(checks) && (!reference || purchases.length < reference.purchases.length ||
+        purchases.length === reference.purchases.length && impact < reference.impact - TOLERANCE)) {
+      reference = { ...comparison, impact };
+    }
+    const doseChanges = ingredients.flatMap(({ id }) => {
+      const dose = doseIn(recipe, id);
+      return !purchases.some(item => item.id === id) && Math.abs(dose - doseIn(baseline, id)) > TOLERANCE
+        ? [{ id, dose }] : [];
+    });
+    options.push({ purchases, after, changes, doseChanges });
+  }
+
+  const singleTrials = misses.flatMap((check, index) => candidates.filter(g => affectedBy(g, check.key))
+    .map(product => ({ check, product, options: ranges[index].options })));
+  const singleLimit = Math.floor(comparisonLimit / 2 / Math.max(1, singleTrials.length));
+  for (const { check, product, options } of singleTrials) {
+    keepRangeOption(check, options, compareWithStock(state, baseline, [product], { protectedKeys, key: check.key }, singleLimit));
+  }
+
+  const combinationRanges = reference
+    ? ranges.filter(({ options }) => !options.some(option => option.after.status === 'in range')) : ranges;
+  if (candidates.length > 1 && combinationRanges.length) {
+    const reservedForOptional = Math.floor(comparisonLimit / 4);
+    const combinationLimit = Math.floor((remaining - reservedForOptional) / combinationRanges.length);
+    for (const { key, options } of combinationRanges) {
+      if (!candidates.some(product => affectedBy(product, key))) continue;
+      const comparison = compareWithStock(state, baseline, candidates, { protectedKeys, key }, combinationLimit);
+      if (comparison?.purchases.length > 1 &&
+          (allInRange(comparison.checks) || !options.some(option => option.after.status === 'in range'))) {
+        keepRangeOption(baselineChecks.get(key), options, comparison);
+      }
+    }
+  }
+
+  if (reference) {
+    const drawer = { ...state.drawer };
+    for (const { id, dose } of reference.purchases) {
+      drawer[id] = { ...drawer[id], owned: true, unlimited: false, stock: dose };
+    }
+    const rangeProducts = new Set(ranges.flatMap(({ options }) =>
+      options.flatMap(option => option.purchases.map(({ id }) => id))));
+    const products = candidates.filter(g => !rangeProducts.has(g.id));
+    const optionalLimit = Math.floor(remaining / Math.max(1, products.length));
+    const priority = { protectedKeys: new Set(reference.checks.map(check => check.key)) };
+    for (const product of products) {
+      const comparison = compareWithStock({ ...state, drawer }, reference.recipe, [product], priority, optionalLimit);
+      if (!comparison || !allInRange(comparison.checks) ||
+          comparison.recipe.score.preferred >= reference.recipe.score.preferred - TOLERANCE) continue;
+      const improvements = comparison.checks.flatMap(after => {
+        const { key } = after;
+        if (!affectedBy(product, key)) return [];
+        const before = reference.checks.find(check => check.key === key).value;
+        const ideal = state.target[key].ideal;
+        const gain = Math.abs(before - ideal) - Math.abs(after.value - ideal);
+        return gain >= 0.01 ? [{ key, before, value: after.value, gain: gain / (SCALES[key] ?? 1) }] : [];
+      }).sort((a, b) => b.gain - a.gain);
+      if (improvements.length) optional.push({ purchase: comparison.purchases[0], ...improvements[0] });
+    }
+    optional.sort((a, b) => b.gain - a.gain);
+  }
+
+  for (const { options } of ranges) {
+    options.sort((a, b) => a.after.difference - b.after.difference || a.purchases.length - b.purchases.length);
+  }
+  return { ranges: ranges.filter(range => range.options.length), optional, reference: reference?.purchases ?? [],
+    evaluated: comparisonLimit - remaining };
+}
+
+export function solveRecipe(state, { ingredients = INGREDIENTS, exactLimit = 12000, searchLimit = 14000,
+  comparisonLimit = 16000 } = {}) {
   const baseline = boundedSearch(state, ingredients, exactLimit, searchLimit);
+  const diagnostics = diagnose(baseline.result, state.target);
   return {
     ...baseline,
-    diagnostics: diagnose(baseline.result, state.target),
-    shopping: stockComparison(state, baseline, ingredients, exactLimit, searchLimit)
+    diagnostics,
+    advice: adviceForStock(state, baseline, diagnostics, ingredients, exactLimit, comparisonLimit)
   };
 }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { defaultState } from '../../src/data.js';
+import { defaultState, presetById } from '../../src/data.js';
 import { INGREDIENTS, ingredientById } from '../../src/catalog.js';
 import { evaluate } from '../../src/evaluate.js';
 import { diagnose, solveRecipe } from '../../src/solver.js';
@@ -48,10 +48,60 @@ test('replaces an unavailable planned dose and recommends stock only when fit im
   assert.equal(solved.adds.epsom, 0);
   assert.equal(solved.diagnostics[0].status, 'low');
   assert.equal(solved.diagnostics[1].status, 'unevaluated');
-  assert.equal(solved.shopping.purchases[0].id, 'gypsum');
-  assert.ok(solved.shopping.purchases[0].amount > 0);
+  assert.equal(solved.advice.ranges.length, 1);
+  assert.equal(solved.advice.ranges[0].key, 'SO4');
+  const gypsum = solved.advice.ranges[0].options.find(option => option.purchases[0].id === 'gypsum');
+  assert.ok(gypsum.purchases[0].amount > 0);
   state.target = { Na: range(90) };
-  assert.equal(solveRecipe(state, options).shopping, null);
+  assert.deepEqual(solveRecipe(state, options).advice.ranges, []);
+});
+
+test('distilled IPA distinguishes independent chloride fixes from optional magnesium tuning', () => {
+  const state = recipe(presetById('ipa').target, ['gypsum']);
+  state.startId = 'distilled';
+  state.batchL = defaultState().batchL;
+  const solved = solveRecipe(state, { comparisonLimit: 12000 });
+  assert.deepEqual(solved.diagnostics.filter(check => check.status !== 'in range'), [
+    { key: 'Cl', status: 'low', value: 0, difference: 25 }
+  ]);
+  assert.equal(solved.advice.evaluated <= 12000, true);
+  const [{ key, options }] = solved.advice.ranges;
+  assert.equal(key, 'Cl');
+  assert.ok(options.length > 2);
+  const tableSalt = options.find(option => option.purchases.some(item => item.id === 'nacl'));
+  assert.equal(tableSalt.after.status, 'in range');
+  assert.ok(tableSalt.changes.some(change => change.key === 'Na' && change.status === 'in range'));
+  assert.ok(options.every(option => option.purchases.length === 1));
+  assert.ok(!options.some(option => option.purchases.some(item => item.id === 'epsom')));
+  const epsom = solved.advice.optional.find(option => option.purchase.id === 'epsom');
+  assert.equal(epsom.key, 'Mg');
+  assert.ok(Math.abs(epsom.value - state.target.Mg.ideal) < Math.abs(epsom.before - state.target.Mg.ideal));
+  assert.ok(!solved.advice.optional.some(option => option.purchase.id === 'nacl'));
+});
+
+test('labels partial and combined stock options and protects targets already in range', () => {
+  const makeChloride = (id, mass) => ({ id, mass, unit: 'g', step: 0.1, maxPerGal: 2 });
+  const first = makeChloride('first', { Cl: 100 });
+  const second = makeChloride('second', { Cl: 100, Na: 5 });
+  const state = recipe({ Cl: range(75, 80, 90), Na: range(0, 0, 5) }, []);
+  state.startId = 'distilled';
+  state.batchL = 1;
+  const { advice } = solveRecipe(state, { ingredients: [first, second] });
+  const options = advice.ranges[0].options;
+  assert.ok(options.some(option => option.after.status === 'low' && option.purchases.length === 1));
+  assert.ok(options.some(option => option.after.status === 'in range' && option.purchases.length === 2));
+
+  const sodium = makeChloride('sodium', { Na: 100 });
+  state.target = { Cl: range(35, 40, 50), Na: range(35, 40, 50) };
+  const complementary = solveRecipe(state, { ingredients: [first, sodium] });
+  assert.ok(complementary.advice.ranges.every(group => group.options.some(option => option.purchases.length === 1)));
+  assert.ok(complementary.advice.ranges.every(group => group.options.some(option => option.purchases.length === 2)));
+  assert.equal(complementary.advice.reference.length, 2);
+
+  const restrictive = recipe({ Cl: range(25, 45, 65), Na: range(0, 0, 5) }, []);
+  restrictive.startId = 'distilled';
+  const restricted = solveRecipe(restrictive, { ingredients: [ingredientById('nacl')] });
+  assert.ok(restricted.advice.ranges.every(group => group.options.every(option => option.after.status === 'low')));
 });
 
 test('selects full dilution for an exact target and scores the displayed pH recipe', () => {

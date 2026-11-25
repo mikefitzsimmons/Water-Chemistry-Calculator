@@ -133,6 +133,7 @@ input[type="number"]{width:86px}
 
 .inrange{color:var(--green);font-weight:700}
 .outrange{color:var(--bad);font-weight:700}
+.unmeasured{color:var(--ink2)}
 .mmrow{display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap}
 .mmrow label{font-size:.875rem;color:var(--ink2);font-weight:650}
 .mmrow input[type="number"]{width:88px}
@@ -148,7 +149,6 @@ input[type="range"]:disabled{cursor:not-allowed;opacity:.55}
 /* additions */
 .addrow{padding:12px 0;border-top:1px solid var(--line)}
 .addrow:first-of-type{border-top:0}
-.addrow.disabled{opacity:.55}
 .addrow .ahead{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
 .addrow .aname{font-weight:700}
 .addrow .anote{font-size:.875rem;color:var(--ink2)}
@@ -170,6 +170,16 @@ input[type="range"]:disabled{cursor:not-allowed;opacity:.55}
 .frow .fn{font-weight:650;font-size:.875rem}
 .frow .fv{text-align:right;font-weight:750;overflow-wrap:anywhere}
 .frow .fv small{display:block;font-weight:650;font-size:.875rem}
+.frow .fv.has-stock-options{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px}
+.stock-options-button{min-width:32px;min-height:36px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--bad);font-size:1.15rem}
+.stock-options-button[aria-expanded="true"]{background:var(--bad-soft)}
+.stock-options{border-left:3px solid var(--bad);border-radius:6px;background:var(--card2);padding:10px 12px;margin:0 0 8px;font-size:.875rem}
+.stock-options ul,.optional-adjustments ul{list-style:none;margin:0;padding:0}
+.stock-options p{margin:4px 0}
+.stock-options li+li{border-top:1px solid var(--line);padding-top:8px;margin-top:8px}
+.optional-adjustments{margin-top:12px;padding:10px 12px;border-radius:8px;background:var(--card2);font-size:.875rem}
+.optional-adjustments p{margin:4px 0 8px}
+.optional-adjustments summary,.optional-adjustments details li{margin-top:8px}
 .mini{position:relative;height:10px;background:var(--track);border-radius:5px}
 .mini .shade{position:absolute;top:0;bottom:0;background:var(--shade);border-radius:5px}
 .mini .idealmark{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--ink);opacity:.7}
@@ -178,6 +188,7 @@ input[type="range"]:disabled{cursor:not-allowed;opacity:.55}
 .notes{margin:10px 0 0;padding:0;list-style:none}
 .notes li{background:var(--bad-soft);border-radius:9px;padding:8px 11px;font-size:13px;margin-top:7px}
 .notes li.good{background:var(--green-soft)}
+.notes li.neutral{background:var(--card2)}
 .presetbox{background:var(--card2);border:1px solid var(--line);border-radius:11px;padding:11px 12px;margin-top:12px}
 .presetbox p{margin:5px 0 0;font-size:13.5px}
 

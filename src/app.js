@@ -295,26 +295,85 @@ function diagnosticText(check) {
   return (check.difference < 0.01 ? "<0.01" : fmt(check.difference, 2)) + " " + unit + " " + check.status;
 }
 
+const resultName = key => IONS.find(ion => ion.id === key)?.name ?? key;
+const resultValue = ({ key, value }) => fmt(value, 2) + (key === "pH" ? "" : " mg/L");
+
+function renderStockOptions(key, name, options) {
+  const items = options.map(({ purchases, after, changes, doseChanges }) => {
+    const products = purchases.map(({ id, amount, dose }) => {
+      const ingredient = ingById(id);
+      return `<p><strong>${esc(ingredient.name)}</strong> <span class="small">${esc(ingredient.sub)}</span><br>
+        Buy ${esc(amountLabel(ingredient, amount))} · Dose ${esc(amountLabel(ingredient, dose))}</p>`;
+    }).join("");
+    const projection = after.status === "in range" ? `${name} would reach ${resultValue(after)} and be in range.`
+      : `${name} would reach ${resultValue(after)} and still be ${diagnosticText(after)}.`;
+    const adjust = doseChanges.map(({ id, dose }) => {
+      const ingredient = ingById(id);
+      return ingredient.name + " " + amountLabel(ingredient, dose);
+    }).join(", ");
+    const related = changes.map(change => resultName(change.key) + " " + resultValue(change) +
+      (change.status === "in range" ? "" : ` (${diagnosticText(change)})`)).join(", ");
+    return `<li>${purchases.length > 1 ? '<strong>Combined adjustment</strong>' : ''}${products}
+      <p>${esc(projection)}</p>
+      ${adjust ? `<p class="small">Other doses in this recipe · ${esc(adjust)}</p>` : ""}
+      ${related ? `<p class="small">Other projected values · ${esc(related)}</p>` : ""}</li>`;
+  }).join("");
+  return `<div id="stock-options-${key}" class="stock-options" hidden><ul>${items}</ul></div>`;
+}
+
+function renderOptionalAdjustments(advice) {
+  const panel = $("optionalAdjustments");
+  panel.hidden = !advice?.optional.length;
+  if (!advice?.optional.length) {
+    panel.replaceChildren();
+    return;
+  }
+  const reference = advice.reference.map(({ id }) => ingById(id).name).join(" and ");
+  const items = advice.optional.map(({ purchase, key, before, value }) => {
+    const ingredient = ingById(purchase.id);
+    return `<li><strong>${esc(ingredient.name)} is optional.</strong> ${esc(resultName(key))} is already in range.
+      A ${esc(amountLabel(ingredient, purchase.dose))} dose in the adjusted recipe moves it from
+      ${esc(resultValue({ key, value: before }))} to ${esc(resultValue({ key, value }))}, closer to the preferred value.</li>`;
+  });
+  panel.innerHTML = `<h3>Optional adjustments</h3>
+    <p class="small">The recipe meets the target ranges${reference ? ` with the ${esc(reference)} adjustment` : ""}.</p>
+    <ul>${items[0]}</ul>${items.length > 1 ? `<details><summary>More optional adjustments</summary><ul>${items.slice(1).join("")}</ul></details>` : ""}`;
+}
+
 function renderFinal(state = S){
   const result = evaluate(state);
   const solved = state === S ? lastSolve : null;
   const fin = result.profile;
   const checks = diagnose(result, state.target);
   const statusByKey = new Map(checks.map(check => [check.key, check]));
-  var html = "";
-  IONS.forEach(function(ion){
-    var t = state.target[ion.id], v = fin[ion.id], ceil = ion.ceil;
-    const floor = ion.id === "Alk" && (t.min < 0 || v < 0) ? targetLimits(ion.id).min : 0;
+  const rangeOptions = new Map(solved?.advice?.ranges.map(({ key, options }) => [key, options]));
+  const rows = state.target.pH ? [...IONS, { id: "pH", name: "pH", ceil: targetLimits("pH").max }] : IONS;
+  $("finalRows").innerHTML = rows.map(ion => {
+    const { id, name, ceil } = ion;
+    const target = state.target[id];
+    const check = statusByKey.get(id);
+    const { status, value } = check;
+    const floor = id === "Alk" && (target.min < 0 || value < 0) ? targetLimits(id).min : 0;
     const pct = x => Math.max(0, Math.min(100, (x - floor) / (ceil - floor) * 100));
-    const check = statusByKey.get(ion.id);
-    const inR = check.status === "in range";
-    html += '<div class="frow"><span class="fn">'+ionLabel(ion)+'</span>'+
-      '<div class="mini"><div class="shade" style="left:'+pct(t.min)+'%;width:'+(pct(t.max)-pct(t.min))+'%"></div>'+
-      '<div class="idealmark" style="left:'+pct(t.ideal)+'%"></div>'+
-      (v === null ? '' : '<div class="valmark" style="left:'+pct(v)+'%"></div>')+'</div>'+
-      '<span class="fv">'+fmt(v, 2)+' <small class="'+(inR?"inrange":"outrange")+'">'+esc(diagnosticText(check))+'</small></span></div>';
-  });
-  $("finalRows").innerHTML = html;
+    const warning = status === "low" || status === "high";
+    const options = rangeOptions.get(id);
+    const direction = status === "low" ? "raise" : "lower";
+    const label = id === "pH" ? name : name.toLowerCase();
+    return `<div class="frow" data-result-key="${id}">
+      <span class="fn">${ionLabel(ion)}</span>
+      <div class="mini" aria-hidden="true">
+        <div class="shade" style="left:${pct(target.min)}%;width:${pct(target.max) - pct(target.min)}%"></div>
+        <div class="idealmark" style="left:${pct(target.ideal)}%"></div>
+        ${value === null ? "" : `<div class="valmark" style="left:${pct(value)}%"></div>`}
+      </div>
+      <div class="fv${options ? ' has-stock-options' : ''}"><div>${fmt(value, 2)}
+        <small class="${warning ? "outrange" : status === "in range" ? "inrange" : "unmeasured"}">
+          ${warning ? '<span aria-hidden="true">⚠</span> ' : ''}${esc(diagnosticText(check))}</small></div>
+        ${options ? `<button type="button" class="stock-options-button" data-stock-options="${id}"
+          aria-label="Ways to ${direction} ${label}" aria-expanded="false" aria-controls="stock-options-${id}">ⓘ</button>` : ""}
+      </div>
+    </div>${options ? renderStockOptions(id, name, options) : ""}`;
+  }).join("");
   const { chemistry, treatment } = result;
   $("finalPH").textContent = chemistry.pH === null
     ? "Unavailable · enter " + chemistry.missing.join(" and ")
@@ -322,26 +381,8 @@ function renderFinal(state = S){
   $("finalRA").innerHTML = fmt(residualAlk(fin)) + ' <small>mg/L as CaCO₃</small>';
   $("finalRatio").textContent = fin.SO4 != null && fin.Cl > 0 ? fmt(fin.SO4/fin.Cl,2)+" : 1" : "—";
   const items = [];
-  const phCheck = statusByKey.get("pH");
-  if (phCheck) {
-    items.push({bad:phCheck.status !== "in range", text:"pH target · " + diagnosticText(phCheck)});
-  }
   if (solved && !solved.complete) {
-    items.push({bad:false, text:"Best recipe found within the search limit. A closer recipe may exist."});
-  }
-  if (solved?.shopping) {
-    for (const alternate of solved.shopping.diagnostics) {
-      const current = statusByKey.get(alternate.key);
-      if (!current || current.status === "in range" || alternate.difference === null ||
-          current.difference !== null && alternate.difference >= current.difference - 1e-9) continue;
-      const name = IONS.find(ion => ion.id === alternate.key)?.name ?? alternate.key;
-      items.push({bad:false, text:name + " with more stock · " + diagnosticText(current) + " → " + diagnosticText(alternate) + "."});
-    }
-    for (const purchase of solved.shopping.purchases) {
-      const g = ingById(purchase.id);
-      items.push({bad:false, text:"Buying " + amountLabel(g, purchase.amount) + " of " + g.name +
-        " could improve the target fit. The comparison used " + amountLabel(g, purchase.dose) + "."});
-    }
+    items.push({ style: "neutral", text: "Best recipe found within the search limit. A closer recipe may exist." });
   }
   if (treatment.status === "short" || treatment.status === "missing") {
     items.push({bad:true, text:treatmentText(treatment, result.volumes.sourceL)});
@@ -363,8 +404,9 @@ function renderFinal(state = S){
     items.push({bad:false, text:"All evaluated values are within their targets."});
   }
   $("finalNotes").innerHTML = items.map(function(n){
-    return '<li class="'+(n.bad?"":"good")+'">'+esc(n.text)+'</li>';
+    return '<li class="'+(n.style ?? (n.bad ? "" : "good"))+'">'+esc(n.text)+'</li>';
   }).join("");
+  renderOptionalAdjustments(solved?.advice);
 }
 
 /* ================= rendering: drawer ================= */
@@ -503,6 +545,13 @@ function keepDrawerFocus(input) {
 }
 
 function bind(){
+  $("finalRows").addEventListener("click", event => {
+    const button = event.target.closest("button[data-stock-options]");
+    if (!button) return;
+    const panel = $(button.getAttribute("aria-controls"));
+    panel.hidden = !panel.hidden;
+    button.setAttribute("aria-expanded", String(!panel.hidden));
+  });
   systemAppearance.addEventListener("change", applyAppearance);
   $("appearance").addEventListener("change", event => {
     S.display.appearance = event.target.value;
