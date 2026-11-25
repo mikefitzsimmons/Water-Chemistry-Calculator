@@ -1,6 +1,7 @@
 import { decodeBackup, encodeBackup, newId, readSave, writeSave } from './storage.js';
 /* ================= data ================= */
-var GAL = 3.78541;
+import { GAL, gallonsToLiters, litersToGallons, fromVolumeDisplay, toVolumeDisplay, alkAsCaCO3 } from './units.js';
+import { evaluate, effectiveDose, mixVolumes } from './evaluate.js';
 var IONS = [
   {id:"Ca",  name:"Calcium",      sym:"Ca²⁺",  ceil:300},
   {id:"Mg",  name:"Magnesium",    sym:"Mg²⁺",  ceil:100},
@@ -41,7 +42,7 @@ var INGREDIENTS = [
    per:{HCO3:-200}},
   {id:"kmeta",   name:"Potassium Metabisulfite", sub:"dechlorination — dose auto-calculated (mg)", unit:"mg", maxPerGal:0, auto:"kmeta"},
   {id:"campden", name:"Campden Tablets", sub:"dechlorination — 1 tablet per 20 gal (crush before use)", unit:"tablets", maxPerGal:0, auto:"campden"},
-  {id:"distilled", name:"Distilled Water", sub:"dilutes the starting water", unit:"gal", maxPerGal:0, auto:"distilled"}
+  {id:"distilled", name:"Distilled Water", sub:"dilutes the starting water", unit:"L", maxPerGal:0, auto:"distilled"}
 ];
 function ingById(id){ for (var i=0;i<INGREDIENTS.length;i++) if (INGREDIENTS[i].id===id) return INGREDIENTS[i]; return null; }
 
@@ -97,7 +98,7 @@ function defaultDrawer(){
 function defaultState(){
   var p = presetById("pale-ale");
   var s = {
-    unit:"gal", batchGal:5, scaleStep:0.1,
+    unit:"gal", batchL:gallonsToLiters(5), scaleStep:0.1,
     startName:"Distilled",
     start:{Ca:0,Mg:0,Na:0,SO4:0,Cl:0,HCO3:0,pH:7,chlorine:0,chlorType:"none"},
     targetPreset:"pale-ale",
@@ -151,8 +152,8 @@ function undo(){
 /* ================= helpers ================= */
 function $(id){ return document.getElementById(id); }
 function esc(s){ return String(s).replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
-function fmt(n, dp){ if (!isFinite(n)) n = 0; return Number(n.toFixed(dp===undefined?0:dp)).toString(); }
-function volLabel(gal){ return S.unit==="gal" ? fmt(gal,2)+" gal" : fmt(gal*GAL,2)+" L"; }
+function fmt(n, dp){ if (!Number.isFinite(n)) return "—"; return Number(n.toFixed(dp===undefined?0:dp)).toString(); }
+function volLabel(liters){ return fmt(toVolumeDisplay(liters, S.unit), 2) + " " + S.unit; }
 function snapAmt(v, unit){
   if (unit==="g") { var st = S.scaleStep; return Math.round(v/st)*st; }
   if (unit==="mL") return Math.round(v*10)/10;
@@ -164,12 +165,11 @@ function toast(msg){
   var t = $("toast"); t.textContent = msg; t.classList.add("show");
   clearTimeout(toastTimer); toastTimer = setTimeout(function(){ t.classList.remove("show"); }, 2400);
 }
-function alkAsCaCO3(hco3){ return hco3 * 50/61; }
 function residualAlk(profile){
-  return alkAsCaCO3(profile.HCO3) - (profile.Ca/1.4 + profile.Mg/1.7);
+  return [profile.HCO3, profile.Ca, profile.Mg].every(Number.isFinite)
+    ? alkAsCaCO3(profile.HCO3) - (profile.Ca/1.4 + profile.Mg/1.7) : null;
 }
-function distilledGal(){ return Math.min(S.adds.distilled||0, S.batchGal); }
-function startGal(){ return Math.max(0, S.batchGal - distilledGal()); }
+function sourceVolume(){ return mixVolumes(S).sourceL; }
 
 /* stock caps, expressed in each ingredient's own unit */
 function stockCap(g){
@@ -180,26 +180,12 @@ function stockCap(g){
 }
 function sliderMax(g){
   if (g.auto) return 0;
-  return g.maxPerGal * S.batchGal;
+  return g.maxPerGal * litersToGallons(S.batchL);
 }
 
 /* ================= chemistry ================= */
 function computeFinal(){
-  var batch = S.batchGal, sg = startGal();
-  var out = {}, i, g, amt, k;
-  for (i=0;i<IONS.length;i++){
-    var ion = IONS[i].id;
-    out[ion] = batch>0 ? S.start[ion] * sg / batch : 0;
-  }
-  for (i=0;i<INGREDIENTS.length;i++){
-    g = INGREDIENTS[i];
-    if (!g.per) continue;
-    amt = S.adds[g.id]||0;
-    if (!amt || batch<=0) continue;
-    for (k in g.per) out[k] += amt * g.per[k] / batch;
-  }
-  if (out.HCO3 < 0) out.HCO3 = 0;
-  return out;
+  return evaluate(S, INGREDIENTS, IONS.map(ion => ion.id)).profile;
 }
 function estimatePH(fin){
   /* Carbonate-equilibrium estimate for the water itself (not mash pH):
@@ -213,24 +199,10 @@ function estimatePH(fin){
     co2 = 0.015;
   }
   /* acid/base equivalents added, meq/L */
-  var acidMeqPerL = 0, i, g, amt;
-  var defs = {lactic:3.09, phosphoric:3.35, citric:2.30, nahco3:-3.13, khco3:-2.64, chalk:-2.64, lime:-7.13};
-  for (i=0;i<INGREDIENTS.length;i++){
-    g = INGREDIENTS[i];
-    if (defs[g.id]===undefined) continue;
-    amt = S.adds[g.id]||0;
-    if (!amt) continue;
-    var perGalMeq = defs[g.id] * (g.unit==="mL" ? 1 : 1);
-    acidMeqPerL += amt * perGalMeq / S.batchGal / GAL * 3.78541 / 3.78541; /* perGal already per gallon; convert below */
-  }
-  /* recompute cleanly: defs are meq per unit per gallon -> meq/L = amt*def/batchGal / 3.785 */
-  acidMeqPerL = 0;
-  for (i=0;i<INGREDIENTS.length;i++){
-    g = INGREDIENTS[i];
-    if (defs[g.id]===undefined) continue;
-    amt = S.adds[g.id]||0;
-    if (!amt) continue;
-    acidMeqPerL += (amt * defs[g.id] / S.batchGal) / GAL;
+  let acidMeqPerL = 0;
+  const equivalents = {lactic:3.09, phosphoric:3.35, citric:2.30, nahco3:-3.13, khco3:-2.64, chalk:-2.64, lime:-7.13};
+  for (const [id, value] of Object.entries(equivalents)) {
+    acidMeqPerL += effectiveDose(S, id) * value / S.batchL;
   }
   var finHCO3mmol = fin.HCO3/61;
   var converted = Math.max(0, acidMeqPerL); /* mmol/L of HCO3 turned into CO2 by acid */
@@ -249,9 +221,9 @@ function dechlorDose(){
   if (!cl || S.start.chlorType==="none") return null;
   var mult = Math.max(1, cl/3);
   if (S.dechlor.mode==="campden"){
-    return {kind:"campden", tablets: Math.ceil(S.batchGal/20 * mult), label:""};
+    return {kind:"campden", tablets: Math.ceil(litersToGallons(S.batchL)/20 * mult), label:""};
   }
-  var mg = S.dechlor.rateMgGal * S.batchGal * mult;
+  var mg = S.dechlor.rateMgGal * litersToGallons(S.batchL) * mult;
   return {kind:"kmeta", mg: mg, grams: mg/1000, label:""};
 }
 
@@ -260,10 +232,10 @@ function renderStart(){
   var html = "";
   IONS.forEach(function(ion){
     html += '<div class="ionfield"><label for="start-'+ion.id+'">'+ion.name+' <span class="unit">(ppm)</span></label>'+
-      '<input type="number" min="0" step="1" id="start-'+ion.id+'" data-ion="'+ion.id+'" value="'+fmt(S.start[ion.id],1)+'"></div>';
+      '<input type="number" min="0" step="1" id="start-'+ion.id+'" data-ion="'+ion.id+'" value="'+(S.start[ion.id] ?? "")+'"></div>';
   });
   html += '<div class="ionfield"><label for="start-pH">pH</label>'+
-    '<input type="number" min="3" max="10" step="0.1" id="start-pH" value="'+fmt(S.start.pH,1)+'"></div>';
+    '<input type="number" min="3" max="10" step="0.1" id="start-pH" value="'+(S.start.pH ?? "")+'"></div>';
   $("startIons").innerHTML = html;
   $("startNameTag").textContent = S.startName;
   $("chlorPpm").value = S.start.chlorine;
@@ -277,7 +249,7 @@ function renderStart(){
   updateStartTiles();
 }
 function updateStartTiles(){
-  $("startAmt").innerHTML = volLabel(startGal()) + ' <small>of '+volLabel(S.batchGal)+'</small>';
+  $("startAmt").innerHTML = volLabel(sourceVolume()) + ' <small>of '+volLabel(S.batchL)+'</small>';
   $("startAlk").innerHTML = fmt(alkAsCaCO3(S.start.HCO3)) + ' <small>ppm</small>';
   $("startRA").innerHTML = fmt(residualAlk(S.start)) + ' <small>ppm as CaCO₃</small>';
 }
@@ -313,10 +285,10 @@ function renderTarget(fin){
   IONS.forEach(function(ion){
     var t = S.target[ion.id], v = fin[ion.id], ceil = ion.ceil;
     var pct = function(x){ return Math.max(0, Math.min(100, x/ceil*100)); };
-    var inR = v >= t.min && v <= t.max;
+    var inR = v !== null && v >= t.min && v <= t.max;
     html += '<div class="trow" data-ion="'+ion.id+'">'+
       '<div class="thead"><span class="tname">'+ion.name+' <span class="tiny">'+ion.sym+'</span></span>'+
-      '<span class="tval">now <b>'+fmt(v)+'</b> ppm · <span class="'+(inR?"inrange":"outrange")+'">'+(inR?"in range":"out of range")+'</span></span></div>'+
+      '<span class="tval">now <b>'+fmt(v)+'</b> ppm · <span class="'+(inR?"inrange":"outrange")+'">'+(v === null ? "missing source value" : inR ? "in range" : "out of range")+'</span></span></div>'+
       '<div class="bar"><div class="shade" style="left:'+pct(t.min)+'%;width:'+(pct(t.max)-pct(t.min))+'%"></div>'+
       '<div class="idealmark" style="left:'+pct(t.ideal)+'%"></div>'+
       '<div class="valmark" style="left:'+pct(v)+'%"></div>'+
@@ -359,7 +331,7 @@ function renderAdds(){
     html += '<div class="addrow'+(owned?"":" disabled")+'"><div class="ahead">'+
       '<label class="check"><input type="checkbox" data-dechlor-enabled '+(S.dechlor.enabled?"checked":"")+(owned?"":" disabled")+'> '+
       '<span class="aname">'+esc(g.name)+'</span></label> <span class="tag">auto dose</span></div>'+
-      '<p class="anote" style="margin:6px 0 0">For '+(fmt(S.start.chlorine,1))+' ppm '+esc(S.start.chlorType)+' in '+volLabel(S.batchGal)+': '+
+      '<p class="anote" style="margin:6px 0 0">For '+(fmt(S.start.chlorine,1))+' ppm '+esc(S.start.chlorType)+' in '+volLabel(S.batchL)+': '+
       (dose.kind==="campden" ? '<b>'+dose.tablets+' tablet'+(dose.tablets===1?"":"s")+'</b> (crush, stir in, wait a few minutes)'
                              : '<b>'+fmt(dose.mg)+' mg</b> ('+fmt(dose.grams,2)+' g) at '+fmt(S.dechlor.rateMgGal)+' mg/gal')+
       (owned ? (d.unlimited ? ' · unlimited in drawer' : ' · you have '+fmt(cap, dose.kind==="campden"?0:1)+' '+g.unit) : ' · not in your drawer')+'</p>'+
@@ -416,10 +388,10 @@ function renderAdds(){
     }
     anyOwned = true;
     var amtGal = S.adds.distilled||0;
-    var dispAmt = S.unit==="gal" ? amtGal : amtGal*GAL;
-    var maxDisp = S.unit==="gal" ? S.batchGal : S.batchGal*GAL;
-    var capGal = stockCap(g); /* stock stored in gallons */
-    var stockFrac = capGal===Infinity ? 1 : Math.max(0, Math.min(1, capGal/S.batchGal));
+    var dispAmt = toVolumeDisplay(amtGal, S.unit);
+    var maxDisp = toVolumeDisplay(S.batchL, S.unit);
+    var capGal = stockCap(g);
+    var stockFrac = capGal===Infinity ? 1 : Math.max(0, Math.min(1, capGal/S.batchL));
     var en = S.enabled.distilled;
     html += '<div class="addrow'+(en?"":" disabled")+'"><div class="ahead">'+
       '<label class="check"><input type="checkbox" data-enable="distilled" '+(en?"checked":"")+'><span class="aname">Distilled Water</span></label>'+
@@ -427,8 +399,8 @@ function renderAdds(){
       '<span class="aamt"><input type="number" min="0" step="0.25" value="'+fmt(dispAmt,2)+'" data-amt="distilled" '+(en?"":"disabled")+' aria-label="Distilled water amount">'+
       '<span class="u">'+(S.unit==="gal"?"gal":"L")+'</span></span></div>'+
       '<input type="range" min="0" max="'+fmt(maxDisp,2)+'" step="'+(S.unit==="gal"?0.25:0.5)+'" value="'+fmt(dispAmt,2)+'" data-slider="distilled" '+(en?"":"disabled")+
-        ' style="background:'+sliderBG(S.batchGal>0?amtGal/S.batchGal:0, stockFrac)+'" aria-label="Distilled water slider">'+
-      '<div class="ends"><span>0</span><span>starting water: '+volLabel(startGal())+' · distilled: '+volLabel(amtGal)+'</span></div>'+
+        ' style="background:'+sliderBG(S.batchL>0?amtGal/S.batchL:0, stockFrac)+'" aria-label="Distilled water slider">'+
+      '<div class="ends"><span>0</span><span>starting water: '+volLabel(sourceVolume())+' · distilled: '+volLabel(amtGal)+'</span></div>'+
       (capGal!==Infinity && amtGal > capGal ? '<p class="warn">That’s more distilled water than the '+volLabel(capGal)+' in your drawer.</p>' : '')+
     '</div>';
   })();
@@ -448,7 +420,7 @@ function renderFinal(fin, notes){
   IONS.forEach(function(ion){
     var t = S.target[ion.id], v = fin[ion.id], ceil = ion.ceil;
     var pct = function(x){ return Math.max(0, Math.min(100, x/ceil*100)); };
-    var inR = v >= t.min && v <= t.max;
+    var inR = v !== null && v >= t.min && v <= t.max;
     html += '<div class="frow"><span class="fn">'+ion.name+'</span>'+
       '<div class="mini"><div class="shade" style="left:'+pct(t.min)+'%;width:'+(pct(t.max)-pct(t.min))+'%"></div>'+
       '<div class="idealmark" style="left:'+pct(t.ideal)+'%"></div><div class="valmark" style="left:'+pct(v)+'%"></div></div>'+
@@ -485,7 +457,7 @@ function renderDrawer(){
     html += '<div class="drow"><div class="dhead">'+
       '<label class="check"><input type="checkbox" data-d-owned="'+g.id+'" '+(d.owned?"checked":"")+'><span class="dname">'+esc(g.name)+'</span></label>'+
       '<span class="anote">'+esc(g.sub)+'</span></div>'+
-      (d.owned ? '<div class="dstock"><label class="lbl">On hand <input type="number" min="0" step="any" value="'+fmt(d.stock,1)+'" data-d-stock="'+g.id+'" '+(d.unlimited?"disabled":"")+'></label>'+
+      (d.owned ? '<div class="dstock"><label class="lbl">On hand <input type="number" min="0" step="any" value="'+(g.id === "distilled" ? fmt(toVolumeDisplay(d.stock, S.unit), 4) : d.stock)+'" data-d-stock="'+g.id+'" '+(d.unlimited?"disabled":"")+'></label>'+
         '<span class="small">'+unitLabel+'</span>'+
         '<label class="check" style="font-weight:550"><input type="checkbox" data-d-unlim="'+g.id+'" '+(d.unlimited?"checked":"")+'> Unlimited</label></div>' : '')+
     '</div>';
@@ -494,7 +466,7 @@ function renderDrawer(){
 }
 
 function renderAll(){
-  $("batchInput").value = S.unit==="gal" ? fmt(S.batchGal,2) : fmt(S.batchGal*GAL,2);
+  $("batchInput").value = fmt(toVolumeDisplay(S.batchL, S.unit),2);
   $("unitGal").setAttribute("aria-pressed", S.unit==="gal" ? "true":"false");
   $("unitL").setAttribute("aria-pressed", S.unit==="L" ? "true":"false");
   $("scaleStep").value = String(S.scaleStep);
@@ -509,6 +481,7 @@ function objective(fin){
   var err = 0;
   IONS.forEach(function(ion){
     var t = S.target[ion.id], v = fin[ion.id];
+    if (v === null) return;
     var width = Math.max(10, t.max - t.min);
     if (v < t.min) err += Math.pow((t.min - v)/width, 2) * 4;
     else if (v > t.max) err += Math.pow((v - t.max)/width, 2) * 4;
@@ -520,14 +493,20 @@ function solve(){
   pushUndo(false);
   var vars = [];
   if (S.enabled.distilled && S.drawer.distilled.owned){
-    vars.push({id:"distilled", max: Math.min(S.batchGal*0.95, stockCap(ingById("distilled")))});
+    vars.push({id:"distilled", max: Math.min(S.batchL, stockCap(ingById("distilled")))});
   }
   INGREDIENTS.forEach(function(g){
     if (!g.per) return;
     if (!S.enabled[g.id] || !S.drawer[g.id].owned) return;
     vars.push({id:g.id, max: Math.min(sliderMax(g), stockCap(g))});
   });
-  vars.forEach(function(v){ v.max = isFinite(v.max) ? v.max : sliderMax(ingById(v.id)) || S.batchGal; if (v.id==="distilled" && !isFinite(v.max)) v.max = S.batchGal*0.95; });
+  vars.forEach(function(v){ v.max = isFinite(v.max) ? v.max : sliderMax(ingById(v.id)) || S.batchL; if (v.id==="distilled" && !isFinite(v.max)) v.max = S.batchL; });
+  // Start with a feasible recipe before evaluating any candidates.
+  INGREDIENTS.forEach(g => {
+    if (!S.enabled[g.id] || !g.per && g.id !== "distilled") return;
+    const bound = vars.find(v => v.id === g.id)?.max ?? 0;
+    S.adds[g.id] = Math.min(S.adds[g.id], bound);
+  });
   function cur(){ return objective(computeFinal()); }
   var best = cur();
   var fracs = [0.35, 0.18, 0.08, 0.03, 0.012];
@@ -552,7 +531,7 @@ function solve(){
   /* snap to measurable increments */
   vars.forEach(function(v){
     var g = ingById(v.id);
-    var snapped = v.id==="distilled" ? Math.round((S.adds[v.id]||0)*4)/4 : snapAmt(S.adds[v.id]||0, g.unit);
+    var snapped = v.id==="distilled" ? (S.adds[v.id] >= S.batchL - 1e-9 ? S.batchL : Math.round(S.adds[v.id]/gallonsToLiters(0.25))*gallonsToLiters(0.25)) : snapAmt(S.adds[v.id]||0, g.unit);
     S.adds[v.id] = Math.max(0, Math.min(isFinite(v.max)?v.max:snapped, snapped));
   });
   /* shortfall notes: would more of a capped ingredient help? */
@@ -645,7 +624,7 @@ function bind(){
   $("batchInput").addEventListener("change", function(){
     pushUndo(false);
     var v = parseFloat(this.value) || 0;
-    S.batchGal = S.unit==="gal" ? Math.max(0.5, v) : Math.max(0.5, v/GAL);
+    S.batchL = Math.max(gallonsToLiters(0.5), fromVolumeDisplay(v, S.unit));
     saveLS(); renderAll();
   });
   $("unitGal").addEventListener("click", function(){ if (S.unit!=="gal"){ pushUndo(false); S.unit="gal"; saveLS(); renderAll(); } });
@@ -657,8 +636,8 @@ function bind(){
   /* starting water */
   $("startIons").addEventListener("input", function(e){
     var ion = e.target.getAttribute("data-ion");
-    if (ion){ pushUndo(true); S.start[ion] = Math.max(0, parseFloat(e.target.value)||0); S.startName = "Custom"; $("startNameTag").textContent = "Custom"; saveLS(); updateStartTiles(); renderTarget(); renderFinal(); return; }
-    if (e.target.id === "start-pH"){ pushUndo(true); S.start.pH = Math.min(10, Math.max(3, parseFloat(e.target.value)||7)); saveLS(); renderFinal(); }
+    if (ion){ pushUndo(true); S.start[ion] = e.target.value === "" ? null : Math.max(0, Number(e.target.value)); S.startName = "Custom"; $("startNameTag").textContent = "Custom"; saveLS(); updateStartTiles(); renderTarget(); renderFinal(); return; }
+    if (e.target.id === "start-pH"){ pushUndo(true); S.start.pH = e.target.value === "" ? null : Math.min(10, Math.max(3, Number(e.target.value))); saveLS(); renderFinal(); }
   });
   $("chlorPpm").addEventListener("change", function(){ pushUndo(false); S.start.chlorine = Math.max(0, parseFloat(this.value)||0); saveLS(); renderAdds(); renderFinal(); });
   $("chlorType").addEventListener("change", function(){ pushUndo(false); S.start.chlorType = this.value; saveLS(); renderAdds(); renderFinal(); });
@@ -782,7 +761,7 @@ function bind(){
     if ((id = t.getAttribute("data-slider"))){
       pushUndo(true);
       var raw = parseFloat(t.value)||0;
-      if (id === "distilled"){ S.adds.distilled = S.unit==="gal" ? raw : raw/GAL; }
+      if (id === "distilled"){ S.adds.distilled = fromVolumeDisplay(raw, S.unit); }
       else S.adds[id] = snapAmt(raw, ingById(id).unit);
       saveLS();
       /* update this row in place; full render on change (drag end) */
@@ -791,8 +770,8 @@ function bind(){
         var num = row.querySelector('[data-amt="'+id+'"]');
         if (num) num.value = id==="distilled" ? fmt(parseFloat(t.value)||0, 2) : fmt(S.adds[id], ingById(id).unit==="g"?2:1);
         if (id === "distilled"){
-          t.style.background = sliderBG(S.batchGal>0 ? S.adds.distilled/S.batchGal : 0,
-            stockCap(ingById("distilled"))===Infinity ? 1 : Math.max(0, Math.min(1, stockCap(ingById("distilled"))/S.batchGal)));
+          t.style.background = sliderBG(S.batchL>0 ? S.adds.distilled/S.batchL : 0,
+            stockCap(ingById("distilled"))===Infinity ? 1 : Math.max(0, Math.min(1, stockCap(ingById("distilled"))/S.batchL)));
         } else {
           var gg = ingById(id), mx = sliderMax(gg), cp = stockCap(gg);
           t.style.background = sliderBG(mx>0 ? S.adds[id]/mx : 0, cp===Infinity ? 1 : Math.max(0, Math.min(1, cp/mx)));
@@ -809,7 +788,7 @@ function bind(){
     if ((id = t.getAttribute("data-amt"))){
       pushUndo(false);
       var raw = Math.max(0, parseFloat(t.value)||0);
-      if (id === "distilled"){ S.adds.distilled = S.unit==="gal" ? raw : raw/GAL; }
+      if (id === "distilled"){ S.adds.distilled = fromVolumeDisplay(raw, S.unit); }
       else S.adds[id] = snapAmt(raw, ingById(id).unit);
       saveLS(); renderAdds(); updateStartTiles(); renderTarget(); renderFinal();
     }
@@ -822,7 +801,7 @@ function bind(){
     var t = e.target, id;
     if ((id = t.getAttribute("data-d-owned"))){ pushUndo(false); S.drawer[id].owned = t.checked; saveLS(); renderDrawer(); renderAdds(); renderFinal(); }
     else if ((id = t.getAttribute("data-d-unlim"))){ pushUndo(false); S.drawer[id].unlimited = t.checked; saveLS(); renderDrawer(); renderAdds(); }
-    else if ((id = t.getAttribute("data-d-stock"))){ pushUndo(false); S.drawer[id].stock = Math.max(0, parseFloat(t.value)||0); saveLS(); renderAdds(); renderFinal(); }
+    else if ((id = t.getAttribute("data-d-stock"))){ pushUndo(false); S.drawer[id].stock = id === "distilled" ? fromVolumeDisplay(Math.max(0, Number(t.value)||0), S.unit) : Math.max(0, Number(t.value)||0); saveLS(); renderAdds(); renderFinal(); }
   });
 }
 

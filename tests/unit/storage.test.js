@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { gallonsToLiters } from '../../src/units.js';
 import { legacy } from '../fixtures/legacy.js';
 import { decodeBackup, encodeBackup, LEGACY_KEY, readSave, STORAGE_KEY, writeSave } from '../../src/storage.js';
 
 function setup() {
   const defaults = {
-    ...structuredClone(legacy),
+    ...structuredClone(legacy), batchL: gallonsToLiters(5),
     targetPreset: 'pale-ale', savedStarts: [], customPresets: [],
     adds: { ...legacy.adds, kmeta: 0 }, enabled: { ...legacy.enabled, kmeta: true }
   };
+  delete defaults.batchGal;
   const records = new Map();
   const storage = { getItem: key => records.get(key) ?? null, setItem: (key, value) => records.set(key, value) };
   return { defaults, records, storage, getStorage: () => storage };
@@ -41,7 +43,7 @@ test('invalid backups are rejected and a failed save preserves the persisted rec
   assert.throws(() => decodeBackup('{"version":99,"data":{}}', defaults), /version/);
   assert.throws(() => decodeBackup(encodeBackup({ ...defaults, adds: { gypsum: -1 } }), defaults), /invalid/);
   storage.setItem = () => { throw new Error('quota'); };
-  assert.equal(writeSave(getStorage, { ...defaults, batchGal: 8 }), false);
+  assert.equal(writeSave(getStorage, { ...defaults, batchL: 8 }), false);
   assert.equal(records.get(STORAGE_KEY), before);
   assert.equal(readSave(() => { throw new Error('blocked'); }, defaults).status, 'unavailable');
 });

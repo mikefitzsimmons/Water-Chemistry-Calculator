@@ -1,6 +1,8 @@
+import { gallonsToLiters } from './units.js';
+
 export const LEGACY_KEY = 'wcStaticV1';
 export const STORAGE_KEY = 'wcStaticV2';
-export const VERSION = 2;
+export const VERSION = 3;
 
 export const newId = () => crypto.randomUUID();
 
@@ -32,7 +34,7 @@ function validRecords(records, valid) {
 
 function validate(state, defaults) {
   const keys = Object.keys(defaults.drawer);
-  if (!(object(state) && ['gal', 'L'].includes(state.unit) && quantity(state.batchGal) && state.batchGal > 0 &&
+  if (!(object(state) && ['gal', 'L'].includes(state.unit) && quantity(state.batchL) && state.batchL > 0 &&
     [0.01, 0.05, 0.1, 0.5, 1].includes(state.scaleStep) && text(state.startName) &&
     validProfile(state.start) && text(state.targetPreset) && validTarget(state.target) &&
     validRecords(state.savedStarts, entry => validProfile(entry.profile)) &&
@@ -66,8 +68,24 @@ function legacyTarget(value) {
   }));
 }
 
+function convertVolumes(state) {
+  if (!object(state) || !Object.hasOwn(state, 'batchGal')) return state;
+  const { batchGal, ...rest } = state;
+  const result = { ...rest, batchL: gallonsToLiters(batchGal) };
+  if (rest.adds?.distilled !== undefined) {
+    result.adds = { ...rest.adds, distilled: gallonsToLiters(rest.adds.distilled) };
+  }
+  if (rest.drawer?.distilled) {
+    result.drawer = { ...rest.drawer, distilled: {
+      ...rest.drawer.distilled, stock: gallonsToLiters(rest.drawer.distilled.stock)
+    } };
+  }
+  return result;
+}
+
 export function migrateLegacy(record, defaults) {
   if (!object(record)) throw new Error('The prototype save is invalid.');
+  record = convertVolumes(record);
   const state = {
     ...structuredClone(defaults),
     ...record,
@@ -96,8 +114,8 @@ export function encodeBackup(state) {
 
 export function decodeBackup(raw, defaults) {
   const record = JSON.parse(raw);
-  if (!object(record) || record.version !== VERSION) throw new Error('This backup version is unsupported.');
-  return validate(record.data, defaults);
+  if (!object(record) || ![2, VERSION].includes(record.version)) throw new Error('This backup version is unsupported.');
+  return validate(record.version === 2 ? convertVolumes(record.data) : record.data, defaults);
 }
 
 export function writeSave(getStorage, state) {
