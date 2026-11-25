@@ -31,6 +31,7 @@ test('lowering stock preserves the recipe, while edits and Calculate obey measur
   await expect(page.locator('#finalNotes')).not.toContainText('Shopping list');
   await page.locator('[data-enable="gypsum"]').check();
   await page.locator('#solveBtn').click();
+  await expect(page.locator('#solveStatus')).toHaveText('Additions calculated.');
   expect(Number(await gypsum.inputValue())).toBeLessThanOrEqual(4);
   await setStock('0.25');
   await setDose('6');

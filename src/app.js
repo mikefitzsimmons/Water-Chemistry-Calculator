@@ -2,6 +2,7 @@ import { decodeBackup, encodeBackup, newId, readSave, writeSave } from './storag
 /* ================= data ================= */
 import { gallonsToLiters, litersToGallons, fromVolumeDisplay, toVolumeDisplay } from './units.js';
 import { INGREDIENTS, ingredientById as ingById } from './catalog.js';
+import { diagnose } from './solver.js';
 import { dechlorination } from './dechlorination.js';
 import { evaluate, mixVolumes } from './evaluate.js';
 import { stockCap as availableStock, doseMaximum, doseGrid, snapDose, shortfalls } from './inventory.js';
@@ -16,7 +17,11 @@ const saveMessages = {
   migrated: "Prototype data migrated and saved.",
   unavailable: "Browser save unavailable. Export a backup to keep your changes."
 };
+let revision = 0;
+let lastSolve = null;
 function saveLS(){
+  revision++;
+  lastSolve = null;
   $("saveStatus").textContent = saveMessages[writeSave(getStorage, S) ? "saved" : "unavailable"];
 }
 
@@ -241,26 +246,54 @@ function renderAdds(){
 }
 
 /* ================= rendering: final ================= */
-function renderFinal(fin, notes){
-  fin = fin || computeFinal();
+function amountLabel(g, amount) {
+  return g.id === "distilled" ? volLabel(amount) : fmt(amount, 3) + " " + g.unit;
+}
+
+function diagnosticText(check) {
+  if (check.difference === null || check.difference === 0) return check.status;
+  const unit = check.key === "pH" ? "pH units" : "mg/L";
+  return fmt(check.difference, 2) + " " + unit + " " + check.status;
+}
+
+function renderFinal(){
+  const result = evaluate(S);
+  const fin = result.profile;
+  const checks = diagnose(result, S.target);
+  const statusByKey = new Map(checks.map(check => [check.key, check]));
   var html = "";
   IONS.forEach(function(ion){
     var t = S.target[ion.id], v = fin[ion.id], ceil = ion.ceil;
     var pct = function(x){ return Math.max(0, Math.min(100, x/ceil*100)); };
-    var inR = v !== null && v >= t.min && v <= t.max;
+    const check = statusByKey.get(ion.id);
+    const inR = check.status === "in range";
     html += '<div class="frow"><span class="fn">'+ion.name+'</span>'+
       '<div class="mini"><div class="shade" style="left:'+pct(t.min)+'%;width:'+(pct(t.max)-pct(t.min))+'%"></div>'+
       '<div class="idealmark" style="left:'+pct(t.ideal)+'%"></div><div class="valmark" style="left:'+pct(v)+'%"></div></div>'+
-      '<span class="fv">'+fmt(v)+' <small class="'+(inR?"inrange":"outrange")+'">target '+fmt(t.min, 2)+'–'+fmt(t.max, 2)+'</small></span></div>';
+      '<span class="fv">'+fmt(v)+' <small class="'+(inR?"inrange":"outrange")+'">'+esc(diagnosticText(check))+'</small></span></div>';
   });
   $("finalRows").innerHTML = html;
-  const { chemistry, treatment } = evaluate(S);
+  const { chemistry, treatment } = result;
   $("finalPH").textContent = chemistry.pH === null
     ? "Unavailable · enter " + chemistry.missing.join(" and ")
     : fmt(chemistry.pH, 2) + (chemistry.assumed ? " · assumed source data" : "");
   $("finalRA").innerHTML = fmt(residualAlk(fin)) + ' <small>ppm as CaCO₃</small>';
   $("finalRatio").textContent = fin.Cl > 0 ? fmt(fin.SO4/fin.Cl,2)+" : 1" : "—";
-  var items = notes ? notes.slice() : [];
+  const items = [];
+  const phCheck = statusByKey.get("pH");
+  if (phCheck && phCheck.status !== "in range") {
+    items.push({bad:true, text:"pH target · " + diagnosticText(phCheck)});
+  }
+  if (lastSolve && !lastSolve.complete) {
+    items.push({bad:false, text:"Best recipe found within the search limit. A closer recipe may exist."});
+  }
+  if (lastSolve?.shopping) {
+    for (const purchase of lastSolve.shopping.purchases) {
+      const g = ingById(purchase.id);
+      items.push({bad:false, text:"Buying " + amountLabel(g, purchase.amount) + " of " + g.name +
+        " could improve the target fit. The comparison used " + amountLabel(g, purchase.dose) + "."});
+    }
+  }
   if (treatment.status === "short" || treatment.status === "missing") {
     items.push({bad:true, text:treatmentText(treatment)});
   }
@@ -270,11 +303,12 @@ function renderFinal(fin, notes){
   }
   for (const shortage of shortfalls(S, INGREDIENTS)) {
     const g = ingById(shortage.id);
-    const amount = g.id === "distilled" ? volLabel(shortage.amount) : fmt(shortage.amount, 3) + " " + g.unit;
+    const amount = amountLabel(g, shortage.amount);
     items.push({bad:true, text:"Shopping list · " + g.name + " · " + amount});
   }
-  var allIn = IONS.every(function(ion){ var t=S.target[ion.id]; return fin[ion.id] !== null && fin[ion.id]>=t.min && fin[ion.id]<=t.max; });
-  if (allIn && !items.some(function(n){return n.bad;})) items.push({bad:false, text:"Every ion is inside its target range."});
+  if (checks.every(check => check.status === "in range")) {
+    items.push({bad:false, text:"All evaluated values are within their targets."});
+  }
   $("finalNotes").innerHTML = items.map(function(n){
     return '<li class="'+(n.bad?"":"good")+'">'+esc(n.text)+'</li>';
   }).join("");
@@ -309,82 +343,47 @@ function refreshComputed(){
 }
 
 /* ================= solver ================= */
-function objective(fin){
-  var err = 0;
-  IONS.forEach(function(ion){
-    var t = S.target[ion.id], v = fin[ion.id];
-    if (v === null) return;
-    var width = Math.max(10, t.max - t.min);
-    if (v < t.min) err += Math.pow((t.min - v)/width, 2) * 4;
-    else if (v > t.max) err += Math.pow((v - t.max)/width, 2) * 4;
-    err += Math.pow((v - t.ideal)/Math.max(width, ion.ceil/4), 2) * 0.35;
+function runSolver(state) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./solver-worker.js", import.meta.url), { type: "module" });
+    worker.addEventListener("message", ({ data }) => {
+      worker.terminate();
+      if (data.error) reject(new Error(data.error));
+      else resolve(data.result);
+    }, { once: true });
+    worker.addEventListener("error", () => {
+      worker.terminate();
+      reject(new Error("The calculation worker could not start."));
+    }, { once: true });
+    worker.postMessage(state);
   });
-  return err;
 }
-function solve(){
-  pushUndo(false);
-  var vars = [];
-  if (S.enabled.distilled && S.drawer.distilled.owned){
-    vars.push({id:"distilled", max: Math.min(S.batchL, stockCap(ingById("distilled")))});
-  }
-  INGREDIENTS.forEach(function(g){
-    if (!g.mass) return;
-    if (!S.enabled[g.id] || !S.drawer[g.id].owned) return;
-    vars.push({id:g.id, max: Math.min(sliderMax(g), stockCap(g))});
-  });
-  vars.forEach(function(v){ v.max = isFinite(v.max) ? v.max : sliderMax(ingById(v.id)) || S.batchL; if (v.id==="distilled" && !isFinite(v.max)) v.max = S.batchL; });
-  // Start with a feasible recipe before evaluating any candidates.
-  INGREDIENTS.forEach(g => {
-    if (!S.enabled[g.id] || !g.mass && g.id !== "distilled") return;
-    const bound = vars.find(v => v.id === g.id)?.max ?? 0;
-    S.adds[g.id] = snapDose(S, g, Math.min(S.adds[g.id], bound));
-  });
-  function cur(){ return objective(computeFinal()); }
-  var best = cur();
-  var fracs = [0.35, 0.18, 0.08, 0.03, 0.012];
-  fracs.forEach(function(f){
-    vars.forEach(function(v){
-      var step = Math.max(v.max * f, v.id==="distilled" ? 0.05 : (ingById(v.id).unit==="g" ? S.scaleStep : 0.05));
-      var guard = 0;
-      while (guard++ < 60){
-        var amt = S.adds[v.id]||0, improved = false;
-        [step, -step].forEach(function(ds){
-          var nv = amt + ds;
-          if (nv < 0 || nv > v.max + 1e-9) return;
-          S.adds[v.id] = nv;
-          var o = cur();
-          if (o < best - 1e-9){ best = o; amt = nv; improved = true; }
-          else S.adds[v.id] = amt;
-        });
-        if (!improved) break;
-      }
-    });
-  });
-  vars.forEach(v => { S.adds[v.id] = snapDose(S, ingById(v.id), S.adds[v.id]); });
-  /* shortfall notes: would more of a capped ingredient help? */
-  var notes = [], fin = computeFinal();
-  vars.forEach(function(v){
-    var g = ingById(v.id);
-    var cap = stockCap(g);
-    if (!isFinite(cap)) return;
-    var amt = S.adds[v.id]||0;
-    var atCap = v.id==="distilled" ? amt >= cap - 1e-9 : amt >= Math.min(sliderMax(g), cap) - 1e-9;
-    if (!atCap || cap <= 0 && amt <= 0) return;
-    var before = objective(fin);
-    S.adds[v.id] = amt * 1.25 + (g.unit==="g" ? 1 : 0.2);
-    var after = objective(computeFinal());
-    S.adds[v.id] = amt;
-    if (after < before * 0.97){
-      notes.push({bad:true, text:"The solver wanted more "+g.name+" than the "+fmt(cap, g.unit==="tablets"?0:1)+" "+(v.id==="distilled"?"gal":g.unit)+" in your drawer — it capped the dose there. Consider getting more."});
+
+async function solve(){
+  const button = $("solveBtn");
+  button.disabled = true;
+  $("solveStatus").textContent = "Calculating additions…";
+  const inputRevision = revision;
+  try {
+    const solved = await runSolver(S);
+    if (inputRevision !== revision) {
+      $("solveStatus").textContent = "Inputs changed. Calculate again for the current recipe.";
+      return;
     }
-  });
-  var anyDose = vars.some(function(v){ return (S.adds[v.id]||0) > 0; });
-  if (!notes.length && anyDose) notes.push({bad:false, text:"Additions calculated — amounts are snapped to your scale’s resolution and capped at drawer stock."});
-  if (!vars.length) notes.push({bad:true, text:"Nothing to dose with: enable some additions you own in the Ingredient Drawer first."});
-  saveLS(); renderAdds(); renderFinal(fin, notes); updateStartTiles(); renderTarget(fin);
-  var finalCard = $("sec-final");
-  if (window.innerWidth < 1020 && finalCard) finalCard.scrollIntoView({behavior:"smooth", block:"start"});
-  toast("Additions calculated");
+    const changed = JSON.stringify(S.adds) !== JSON.stringify(solved.adds);
+    if (changed) {
+      pushUndo(false);
+      S.adds = solved.adds;
+      saveLS();
+    }
+    lastSolve = solved;
+    refreshComputed();
+    $("solveStatus").textContent = "Additions calculated.";
+  } catch (error) {
+    $("solveStatus").textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
 }
 
 /* ================= drawer open/close ================= */
@@ -624,7 +623,10 @@ function bind(){
     const id = input.dataset.slider;
     if (!id) return;
     const g = ingById(id);
-    if (!preview) preview = { id, original: S.adds[id] };
+    if (!preview) {
+      preview = { id, original: S.adds[id] };
+      revision++;
+    }
     const amount = configPreviewDose(g, rawDose(input, id));
     S.adds[id] = amount;
     const row = input.closest(".addrow");
