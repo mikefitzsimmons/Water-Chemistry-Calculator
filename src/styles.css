@@ -105,8 +105,8 @@ input[type="number"]{width:86px}
 #sec-final{align-self:start}
 
 /* ion input grids */
-.iongrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:10px}
-.ionfield{display:flex;flex-direction:column;gap:4px}
+.iongrid{display:grid;margin-top:10px;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:10px}
+.ionfield{display:flex;flex-direction:column;justify-content:flex-end;gap:4px}
 .ionfield label{font-size:.875rem;font-weight:650;color:var(--ink2)}
 .ionfield input{width:100%}
 .ionfield .unit{font-weight:400}
@@ -244,4 +244,9 @@ details>div{padding-top:5px}
   .addrow .aamt{margin-left:0}
   .target-grid{gap:4px}
   .frow{gap:5px}
+}
+.section-jumps{display:none}
+@media (max-width:1019px){
+  .section-jumps{display:flex;flex-wrap:wrap;gap:8px 16px;margin:0 0 16px;font-size:.875rem;font-weight:650}
+  .card{scroll-margin-top:10px}
 }

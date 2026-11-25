@@ -26,7 +26,7 @@ export const INGREDIENTS = [
     pubchem('10035-04-8'), { Ca: 1, Cl: 2 }),
   solid('cacl2-anhydrous', 'Calcium chloride anhydrous', 'CaCl₂', 110.98, 2,
     pubchem(5284359), { Ca: 1, Cl: 2 }),
-  solid('epsom', 'Epsom salt', 'MgSO₄·7H₂O', 246.47, 3, pubchem(24843), { Mg: 1, SO4: 1 }),
+  solid('epsom', 'Epsom salt', 'MgSO₄·7H₂O', 246.48, 3, pubchem(24843), { Mg: 1, SO4: 1 }),
   solid('mgcl2', 'Magnesium chloride', 'MgCl₂·6H₂O', 203.30, 3, pubchem(24644), { Mg: 1, Cl: 2 }),
   solid('nacl', 'Table salt', 'NaCl · non-iodized', 58.44, 1.5, pubchem(5234), { Na: 1, Cl: 1 }),
   solid('nahco3', 'Baking soda', 'NaHCO₃', 84.01, 2, pubchem(516892), { Na: 1 },

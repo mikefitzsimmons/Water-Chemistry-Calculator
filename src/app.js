@@ -20,6 +20,7 @@ const saveMessages = {
 };
 let revision = 0;
 let lastSolve = null;
+let importSequence = 0;
 function persistState(){
   $("saveStatus").textContent = saveMessages[writeSave(getStorage, S) ? "saved" : "unavailable"];
 }
@@ -227,8 +228,8 @@ function renderAdds(){
       </div>
       <input type="range" min="0" max="${grid.last}" step="1" value="${doseIndex(grid, planned)}"
         data-slider="${g.id}" ${enabled && grid.last ? "" : "disabled"} aria-label="${g.name} slider"
-        aria-valuetext="${doseLabel}" style="background:${sliderBG(max > 0 ? Math.min(1, planned / max) : 0, stockFraction)}">
-      <div class="ends"><span>${cap === Infinity ? "Unlimited stock" : "On hand · " + amountLabel(g, cap)}</span>
+        aria-valuetext="${esc(doseLabel)}" style="background:${sliderBG(max > 0 ? Math.min(1, planned / max) : 0, stockFraction)}">
+      <div class="ends"><span>${cap === Infinity ? "Unlimited stock" : "On hand · " + esc(amountLabel(g, cap))}</span>
         <span>Batch maximum · ${amountLabel(g, max)}</span></div>
       <p class="warn" data-stock-warning ${enabled && planned - cap > 1e-9 ? "" : "hidden"}>This amount exceeds your stock.</p>
     </div>`;
@@ -243,7 +244,10 @@ function renderAdds(){
 
 /* ================= rendering: final ================= */
 function amountLabel(g, amount) {
-  return g.id === "distilled" ? volLabel(amount) : fmt(amount, 3) + " " + g.unit;
+  const unit = g.id === "distilled" ? S.unit : g.unit;
+  const quantity = g.id === "distilled" ? toVolumeDisplay(amount, S.unit) : amount;
+  const value = quantity > 0 && quantity < 0.000001 ? "<0.000001" : fmt(quantity, 6);
+  return value + " " + unit;
 }
 
 function diagnosticText(check) {
@@ -275,8 +279,8 @@ function renderFinal(state = S){
   $("finalPH").textContent = chemistry.pH === null
     ? "Unavailable · enter " + chemistry.missing.join(" and ")
     : fmt(chemistry.pH, 2) + (chemistry.assumed ? " · assumed source data" : "");
-  $("finalRA").innerHTML = fmt(residualAlk(fin)) + ' <small>ppm as CaCO₃</small>';
-  $("finalRatio").textContent = fin.Cl > 0 ? fmt(fin.SO4/fin.Cl,2)+" : 1" : "—";
+  $("finalRA").innerHTML = fmt(residualAlk(fin)) + ' <small>mg/L as CaCO₃</small>';
+  $("finalRatio").textContent = fin.SO4 != null && fin.Cl > 0 ? fmt(fin.SO4/fin.Cl,2)+" : 1" : "—";
   const items = [];
   const phCheck = statusByKey.get("pH");
   if (phCheck) {
@@ -286,6 +290,13 @@ function renderFinal(state = S){
     items.push({bad:false, text:"Best recipe found within the search limit. A closer recipe may exist."});
   }
   if (solved?.shopping) {
+    for (const alternate of solved.shopping.diagnostics) {
+      const current = statusByKey.get(alternate.key);
+      if (!current || current.status === "in range" || alternate.difference === null ||
+          current.difference !== null && alternate.difference >= current.difference - 1e-9) continue;
+      const name = IONS.find(ion => ion.id === alternate.key)?.name ?? alternate.key;
+      items.push({bad:false, text:name + " with more stock · " + diagnosticText(current) + " → " + diagnosticText(alternate) + "."});
+    }
     for (const purchase of solved.shopping.purchases) {
       const g = ingById(purchase.id);
       items.push({bad:false, text:"Buying " + amountLabel(g, purchase.amount) + " of " + g.name +
@@ -422,14 +433,16 @@ async function importBackup(event){
   const file = event.target.files[0];
   event.target.value = "";
   if (!file) return;
+  const sequence = ++importSequence;
   try {
     const data = decodeBackup(await file.text(), defaultState());
+    if (sequence !== importSequence) return;
     S = data;
     recordChange({ persistNoop: true });
     renderAll();
     toast("Backup imported");
   } catch (error) {
-    toast("Import failed. " + error.message);
+    if (sequence === importSequence) toast("Import failed. " + error.message);
   }
 }
 
@@ -484,12 +497,13 @@ function bind(){
 
   $("batchInput").addEventListener("change", function(){
     const v = this.valueAsNumber;
-    if (!Number.isFinite(v) || v <= 0) {
+    const liters = fromVolumeDisplay(v, S.unit);
+    if (!Number.isFinite(liters) || liters <= 0) {
       this.value = fmt(toVolumeDisplay(S.batchL, S.unit), 6);
       toast("Enter a batch volume greater than zero.");
       return;
     }
-    S.batchL = fromVolumeDisplay(v, S.unit);
+    S.batchL = liters;
     recordChange(); renderAll();
   });
   $("unitGal").addEventListener("click", function(){ if (S.unit!=="gal"){ S.unit="gal"; recordChange(); renderAll(); } });
@@ -667,7 +681,7 @@ function bind(){
       const focused = document.activeElement === input;
       const unchanged = input.dataset.slider &&
         input.valueAsNumber === doseIndex(doseGrid(S, g, Infinity), S.adds[id]);
-      if (!unchanged && !input.validity.badInput) {
+      if (!unchanged && input.validity.valid) {
         const next = snapDose(S, g, rawDose(input, g));
         if (next !== S.adds[id]) {
           S.adds[id] = next;
@@ -697,11 +711,31 @@ function bind(){
   });
 
   /* drawer */
-  $("drawerBody").addEventListener("change", function(e){
-    var t = e.target, id;
-    if ((id = t.getAttribute("data-d-owned"))){ S.drawer[id].owned = t.checked; recordChange(); keepDrawerFocus(t); renderAdds(); renderFinal(); }
-    else if ((id = t.getAttribute("data-d-unlim"))){ S.drawer[id].unlimited = t.checked; recordChange(); keepDrawerFocus(t); renderAdds(); }
-    else if ((id = t.getAttribute("data-d-stock"))){ S.drawer[id].stock = id === "distilled" ? fromVolumeDisplay(Math.max(0, Number(t.value)||0), S.unit) : Math.max(0, Number(t.value)||0); recordChange(); renderAdds(); renderFinal(); }
+  $("drawerBody").addEventListener("change", event => {
+    const input = event.target;
+    const { dOwned, dUnlim, dStock } = input.dataset;
+    if (dOwned || dUnlim) {
+      const item = S.drawer[dOwned ?? dUnlim];
+      if (dOwned) item.owned = input.checked;
+      else item.unlimited = input.checked;
+      recordChange();
+      keepDrawerFocus(input);
+      refreshComputed();
+    }
+    if (dStock) {
+      const item = S.drawer[dStock];
+      const dilution = dStock === "distilled";
+      const quantity = Number(input.value);
+      const stock = dilution ? fromVolumeDisplay(quantity, S.unit) : quantity;
+      if (!input.validity.valid || !Number.isFinite(stock)) {
+        input.value = dilution ? fmt(toVolumeDisplay(item.stock, S.unit), 6) : item.stock;
+        toast("Enter a valid stock quantity.");
+        return;
+      }
+      item.stock = stock;
+      recordChange();
+      refreshComputed();
+    }
   });
 }
 

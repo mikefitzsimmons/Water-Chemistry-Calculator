@@ -1,3 +1,4 @@
+import { PRESETS, STARTS } from './data.js';
 import { alkAsCaCO3, gallonsToLiters } from './units.js';
 
 export const LEGACY_KEY = 'wcStaticV1';
@@ -12,6 +13,8 @@ const quantity = value => Number.isFinite(value) && value >= 0;
 const nullable = (value, valid) => value === null || valid(value);
 const profileKeys = ['Ca', 'Mg', 'Na', 'SO4', 'Cl', 'Alk'];
 const targetKeys = profileKeys;
+const sourceIds = new Set(STARTS.map(start => start.id));
+const targetIds = new Set([...PRESETS.map(preset => preset.id), '__customised']);
 
 function validProfile(value) {
   return object(value) && profileKeys.every(key => nullable(value[key], quantity)) &&
@@ -40,11 +43,11 @@ function validate(state, defaults) {
   if (!(object(state) && ['gal', 'L'].includes(state.unit) && quantity(state.batchL) && state.batchL > 0 &&
     [0.01, 0.05, 0.1, 0.5, 1].includes(state.scaleStep) && text(state.startName) &&
     text(state.startId) && validProfile(state.start) &&
-    (['distilled', 'ro', 'spring', 'custom'].includes(state.startId) ||
+    (sourceIds.has(state.startId) ||
       Array.isArray(state.savedStarts) && state.savedStarts.some(entry => 'saved:' + entry?.id === state.startId)) && text(state.targetPreset) && validTarget(state.target) &&
     validRecords(state.savedStarts, entry => validProfile(entry.profile)) &&
     validRecords(state.customPresets, entry => validTarget(entry.target) && text(entry.blurb)) &&
-    (!state.targetPreset.startsWith('custom:') ||
+    (targetIds.has(state.targetPreset) ||
       state.customPresets.some(entry => 'custom:' + entry.id === state.targetPreset)) &&
     object(state.adds) && object(state.enabled) && object(state.drawer) &&
     keys.every(key => quantity(state.adds[key]) && typeof state.enabled[key] === 'boolean' &&
@@ -150,6 +153,9 @@ export function migrateLegacy(record, defaults) {
   if (state.targetPreset.startsWith('custom:')) {
     const entry = state.customPresets[Number(state.targetPreset.slice(7))];
     state.targetPreset = entry ? 'custom:' + entry.id : '__customised';
+  }
+  if (!targetIds.has(state.targetPreset) && !state.targetPreset.startsWith('custom:')) {
+    state.targetPreset = '__customised';
   }
   if (record.drawer?.kmeta) state.drawer.kmeta.stock *= 1000;
   return validate(convertSourceSelection(convertForms(state, defaults)), defaults);

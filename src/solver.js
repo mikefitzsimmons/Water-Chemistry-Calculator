@@ -1,5 +1,6 @@
 import { INGREDIENTS } from './catalog.js';
 import { evaluate, PROFILE_KEYS, usesDilution } from './evaluate.js';
+import { dechlorination } from './dechlorination.js';
 import { doseAt, doseGrid, doseIndex, doseMaximum, stockCap } from './inventory.js';
 
 const SCALES = { Ca: 50, Mg: 15, Na: 25, SO4: 100, Cl: 50, Alk: 50, pH: 0.5 };
@@ -168,7 +169,7 @@ function stockComparison(state, baseline, ingredients, exactLimit, searchLimit) 
   if (baseline.score.range <= TOLERANCE) return null;
   const drawer = { ...state.drawer };
   const limits = ingredients.filter(g => adjustable(state, g) && stockCap(state, g.id) < doseMaximum(state, g));
-  const treatment = baseline.result.treatment;
+  const treatment = dechlorination(state, state.batchL);
   if (treatment.status === 'short') {
     const product = ingredients.find(g => g.id === treatment.id);
     if (product) limits.push(product);
