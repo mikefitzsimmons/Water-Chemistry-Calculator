@@ -12,7 +12,8 @@ test('pH reports missing inputs and ions remain available through full dilution'
   await page.locator('#openDrawerBtn').click();
   await page.locator('[data-d-unlim="distilled"]').check();
   await page.locator('#doneDrawerBtn').click();
-  await page.locator('[data-enable="gypsum"]').uncheck();
+  await page.locator('[data-amt="gypsum"]').fill('0');
+  await page.locator('[data-amt="gypsum"]').press('Tab');
   await page.locator('[data-amt="distilled"]').fill('5');
   await page.locator('[data-amt="distilled"]').press('Tab');
   await expect(page.locator('#startAmt')).toContainText('0 gal');

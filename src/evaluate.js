@@ -4,16 +4,12 @@ import { carbonateBalance } from './carbonate.js';
 
 export const PROFILE_KEYS = ['Ca', 'Mg', 'Na', 'SO4', 'Cl', 'Alk'];
 
-export function effectiveDose(state, id) {
-  return state.enabled[id] ? state.adds[id] ?? 0 : 0;
-}
-
 export function usesDilution(state) {
   return state.startId !== 'distilled';
 }
 
 export function mixVolumes(state) {
-  const dilutionL = usesDilution(state) ? Math.min(state.batchL, Math.max(0, effectiveDose(state, 'distilled'))) : 0;
+  const dilutionL = usesDilution(state) ? Math.min(state.batchL, Math.max(0, state.adds.distilled ?? 0)) : 0;
   return { batchL: state.batchL, sourceL: state.batchL - dilutionL, dilutionL };
 }
 
@@ -30,7 +26,7 @@ export function evaluate(state, ingredients = INGREDIENTS, keys = PROFILE_KEYS, 
   }));
   const additions = [];
   for (const ingredient of ingredients) {
-    const dose = effectiveDose(state, ingredient.id);
+    const dose = state.adds[ingredient.id] ?? 0;
     if (!dose || !ingredient.mass) continue;
     additions.push([ingredient, dose]);
     for (const [key, mg] of Object.entries(ingredient.mass)) {

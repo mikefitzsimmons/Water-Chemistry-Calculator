@@ -51,7 +51,7 @@ export function snapDose(state, ingredient, amount, stock) {
 export function shortfalls(state, ingredients) {
   return ingredients.flatMap(ingredient => {
     const { id } = ingredient;
-    const planned = state.enabled[id] ? state.adds[id] ?? 0 : 0;
+    const planned = state.adds[id] ?? 0;
     const effective = id === 'distilled' ? (state.startId === 'distilled' ? 0 : Math.min(state.batchL, planned)) : planned;
     const deficit = effective - stockCap(state, id);
     return deficit > EPSILON ? [{ id, amount: deficit }] : [];

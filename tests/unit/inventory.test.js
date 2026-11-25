@@ -18,7 +18,7 @@ test('new numeric or slider edits are capped at a measurable amount', () => {
   assert.equal(snapDose(state, gypsum, 6), 0);
   state.adds.gypsum = 6;
   assert.deepEqual(shortfalls(state, INGREDIENTS), [{ id: 'gypsum', amount: 6 }]);
-  state.enabled.gypsum = false;
+  state.adds.gypsum = 0;
   assert.deepEqual(shortfalls(state, INGREDIENTS), []);
 });
 

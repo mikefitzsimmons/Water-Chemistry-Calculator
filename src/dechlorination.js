@@ -9,7 +9,7 @@ export function dechlorination(state, sourceL) {
   const id = settings?.mode ?? 'kmeta';
   const unit = ingredientById(id)?.unit ?? 'mg';
   const base = { id, unit, required: 0, applied: 0, shortage: 0, sulfateMg: 0, chlorideMg: 0, acidMeq: 0 };
-  if (!settings?.enabled || state.enabled[id] === false) return { ...base, status: 'disabled' };
+  if (!settings?.enabled) return { ...base, status: 'disabled' };
   const { chlorType, chlorBasis, chlorine } = state.start;
   if (sourceL === 0 || !chlorType || chlorType === 'none' || chlorine === 0) {
     return { ...base, status: 'none' };

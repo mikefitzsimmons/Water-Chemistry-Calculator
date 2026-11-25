@@ -8,7 +8,8 @@ test('calcium chloride forms have separate stock and change the calcium result',
   await dihydrate.fill('1.00');
   await dihydrate.press('Tab');
   const before = await calcium.innerText();
-  await page.locator('[data-enable="cacl2-dihydrate"]').uncheck();
+  await dihydrate.fill('0');
+  await dihydrate.press('Tab');
   await page.locator('#openDrawerBtn').click();
   const owned = page.locator('[data-d-owned="cacl2-anhydrous"]');
   if (!await owned.isChecked()) await owned.check();

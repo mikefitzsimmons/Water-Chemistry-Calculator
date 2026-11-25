@@ -40,7 +40,7 @@ test('uses recipe source volume and the actual measurable dose in the profile', 
   assert.ok(Math.abs(result.profile.Cl - 0.3189) < 0.0001);
   state.adds.distilled = 10;
   assert.equal(evaluate(state).treatment.status, 'none');
-  state.enabled.distilled = false;
+  state.adds.distilled = 0;
   assert.equal(evaluate(state).treatment.required, 48);
   state.dechlor.enabled = false;
   assert.equal(evaluate(state).profile.Cl, 0);

@@ -86,6 +86,10 @@ test('explains a stock-limited miss alongside an unevaluated pH goal', async ({ 
   ].map(id => [id, id === 'gypsum']));
   await seedLegacy(context, baseURL, sample);
   await page.goto('/');
+  await page.locator('#openDrawerBtn').click();
+  await page.locator('#deselectAll').click();
+  await page.locator('[data-d-owned="gypsum"]').check();
+  await page.locator('#doneDrawerBtn').click();
   await page.locator('#pHTargetEnabled').check();
   await page.locator('#solveBtn').click();
   await expect(page.locator('#solveStatus')).toHaveText('Additions calculated.');

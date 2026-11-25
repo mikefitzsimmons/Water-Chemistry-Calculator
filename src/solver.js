@@ -57,7 +57,7 @@ function compare(a, b) {
   return 0;
 }
 
-const adjustable = (state, g) => state.enabled[g.id] && !g.inventoryOnly &&
+const adjustable = (state, g) => !g.inventoryOnly &&
   (g.mass || g.id === 'distilled' && usesDilution(state));
 
 function boundedSearch(state, ingredients, exactLimit, searchLimit) {
@@ -66,7 +66,7 @@ function boundedSearch(state, ingredients, exactLimit, searchLimit) {
   const working = { ...state, adds: { ...state.adds } };
   const dimensions = [];
   for (const g of ingredients) {
-    if (g.inventoryOnly && state.enabled[g.id]) working.adds[g.id] = 0;
+    if (g.inventoryOnly) working.adds[g.id] = 0;
     if (!adjustable(state, g)) continue;
     const grid = doseGrid(state, g);
     working.adds[g.id] = 0;

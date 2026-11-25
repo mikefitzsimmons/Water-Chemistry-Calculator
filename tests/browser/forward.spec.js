@@ -1,22 +1,25 @@
 import { expect, test } from '@playwright/test';
-import { seedLegacy } from '../fixtures/legacy.js';
+import { legacy, seedLegacy } from '../fixtures/legacy.js';
 
-test('Calculate excludes stale disabled gypsum and dilution', async ({ page, context, baseURL }) => {
-  await seedLegacy(context, baseURL);
+test('an older recipe drops disabled planned doses and Calculate respects drawer selections', async ({ page, context, baseURL }) => {
+  const sample = structuredClone(legacy);
+  sample.enabled.gypsum = false;
+  sample.enabled.distilled = false;
+  await seedLegacy(context, baseURL, sample);
   await page.goto('/');
-  await page.locator('[data-dechlor-enabled]').uncheck();
-  await page.locator('[data-enable="gypsum"]').uncheck();
-  await page.locator('[data-enable="epsom"]').uncheck();
-  const chloride = page.locator('[data-enable="mgcl2"]');
-  if (await chloride.count()) await chloride.uncheck();
-  await page.locator('[data-enable="distilled"]').uncheck();
+  await expect(page.locator('[data-amt="gypsum"]')).toHaveValue('0');
+  await expect(page.locator('[data-amt="distilled"]')).toHaveValue('0');
+  await page.locator('[data-dechlor-mode]').selectOption('skip');
+  await page.locator('#openDrawerBtn').click();
+  await page.locator('#deselectAll').click();
+  await page.locator('#doneDrawerBtn').click();
   await page.locator('#unitL').click();
   await expect(page.locator('#startAmt')).toContainText('18.927 L');
   await page.locator('#solveBtn').click();
   await expect(page.locator('#startAmt')).toContainText('18.927 L');
   await page.locator('#unitGal').click();
-  await expect(page.locator('[data-amt="gypsum"]')).toHaveValue('6');
-  await expect(page.locator('[data-amt="distilled"]')).toHaveValue('1');
+  await expect(page.locator('[data-amt="gypsum"]')).toHaveCount(0);
+  await expect(page.locator('[data-amt="distilled"]')).toHaveCount(0);
   const sulfate = page.locator('#finalRows .frow').filter({ hasText: 'Sulfate' });
   await expect(sulfate).toContainText('25');
 });

@@ -22,8 +22,8 @@ test('fresh, legacy and current saves preserve zeros, active edits and the origi
   assert.equal(state.start.Alk, 100);
   assert.equal(state.drawer['cacl2-dihydrate'].stock, 0);
   assert.equal(state.drawer['cacl2-anhydrous'].owned, false);
-  assert.equal(state.adds['cacl2-dihydrate'], 1.5);
-  assert.equal(state.enabled['cacl2-dihydrate'], false);
+  assert.equal(state.adds['cacl2-dihydrate'], 0);
+  assert.equal(Object.hasOwn(state, 'enabled'), false);
   assert.equal(state.drawer.kmeta.stock, 250);
   assert.equal(state.dechlor.rateMgGal, 30);
   assert.equal(state.targetPreset, 'custom:target-1');
@@ -50,6 +50,7 @@ test('invalid backups are rejected and a failed save preserves the persisted rec
 test('updates older target limits while preserving active doses, the starting source and saved targets', () => {
   const { defaults, records, getStorage } = setup();
   const state = structuredClone(defaults);
+  state.enabled = Object.fromEntries(Object.keys(state.adds).map(id => [id, true]));
   state.startId = 'ro';
   state.adds.gypsum = 3.5;
   state.target.Ca = { min: 100, ideal: 1e46, max: 1e47 };
@@ -65,5 +66,6 @@ test('updates older target limits while preserving active doses, the starting so
   assert.deepEqual(upgraded.customPresets[0].target.Alk, { min: -330, ideal: 0, max: 330 });
   assert.equal(records.get(STORAGE_KEY), raw);
   assert.deepEqual(decodeBackup(encodeBackup(upgraded), defaults), upgraded);
+  delete state.enabled;
   assert.throws(() => decodeBackup(encodeBackup(state), defaults), /invalid/);
 });

@@ -78,7 +78,6 @@ export function defaultState() {
     startId: 'distilled', startName: 'Distilled', start: structuredClone(STARTS[0].profile),
     targetPreset: 'pale-ale', target: structuredClone(presetById('pale-ale').target),
     adds: Object.fromEntries(INGREDIENTS.map(g => [g.id, 0])),
-    enabled: Object.fromEntries(INGREDIENTS.map(g => [g.id, true])),
     dechlor: { mode: 'kmeta', rateMgGal: null, enabled: true, assayPercent: 100, campdenMg: null },
     drawer: Object.fromEntries(INGREDIENTS.map(g => [g.id, { owned: true, unlimited: true, stock: 0 }])),
     savedStarts: [], customPresets: []

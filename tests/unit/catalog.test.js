@@ -8,7 +8,7 @@ const near = (value, expected) => assert.ok(Math.abs(value - expected) < 0.0001,
 test('documented hydrates contribute the independently calculated masses', () => {
   function atOneGram(id) {
     return evaluate({
-      batchL: 10, start: { Ca: 0, SO4: 0, Cl: 0 }, adds: { [id]: 1 }, enabled: { [id]: true }
+      batchL: 10, start: { Ca: 0, SO4: 0, Cl: 0 }, adds: { [id]: 1 }
     }, INGREDIENTS, ['Ca', 'SO4', 'Cl']).profile;
   }
   const gypsum = atOneGram('gypsum');

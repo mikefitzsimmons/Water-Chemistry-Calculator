@@ -11,7 +11,7 @@ function recipe(target, ids) {
   state.startId = 'custom';
   state.batchL = 2;
   state.target = target;
-  for (const g of INGREDIENTS) state.enabled[g.id] = ids.includes(g.id);
+  for (const g of INGREDIENTS) state.drawer[g.id].owned = ids.includes(g.id);
   return state;
 }
 
@@ -38,19 +38,20 @@ test('matches independent exhaustive enumeration of a small discrete salt proble
   assert.deepEqual(evaluate({ ...state, adds: solved.adds }).profile, solved.result.profile);
 });
 
-test('keeps disabled stale doses out and recommends stock only when fit improves', () => {
+test('replaces an unavailable planned dose and recommends stock only when fit improves', () => {
   const state = recipe({ SO4: range(100, 112, 120), imaginary: range(10) }, ['gypsum']);
   state.adds.epsom = 30;
   Object.assign(state.drawer.gypsum, { unlimited: false, stock: 0.25 });
-  const solved = solveRecipe(state);
+  const options = { ingredients: [ingredientById('gypsum'), ingredientById('epsom')] };
+  const solved = solveRecipe(state, options);
   assert.equal(solved.adds.gypsum, 0.2);
-  assert.equal(solved.adds.epsom, 30);
+  assert.equal(solved.adds.epsom, 0);
   assert.equal(solved.diagnostics[0].status, 'low');
   assert.equal(solved.diagnostics[1].status, 'unevaluated');
   assert.equal(solved.shopping.purchases[0].id, 'gypsum');
   assert.ok(solved.shopping.purchases[0].amount > 0);
   state.target = { Na: range(90) };
-  assert.equal(solveRecipe(state).shopping, null);
+  assert.equal(solveRecipe(state, options).shopping, null);
 });
 
 test('selects full dilution for an exact target and scores the displayed pH recipe', () => {
@@ -71,7 +72,6 @@ test('has deterministic ties and reports a limited search honestly', () => {
   const alternate = { ...salt, id: 'same' };
   const state = recipe({ SO4: range(27.896846) }, ['gypsum']);
   state.drawer.same = state.drawer.gypsum;
-  state.enabled.same = true;
   const options = { ingredients: [salt, alternate] };
   const one = solveRecipe(state, options);
   assert.deepEqual(solveRecipe(state, options).adds, one.adds);

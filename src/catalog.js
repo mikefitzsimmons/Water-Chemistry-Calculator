@@ -42,9 +42,9 @@ export const INGREDIENTS = [
     { strength: 0.88, density: 1.214 }),
   acid('phosphoric', 'Phosphoric acid 85%', 'H₃PO₄ · 85% w/w', 97.99, [2.12, 7.20, 12.44],
     'https://docs.alliancechemical.com/tds/phosphoric-acid-85-usp-food-grade', { strength: 0.85, density: 1.685 }),
-  { id: 'kmeta', name: 'Potassium metabisulfite', sub: 'K₂S₂O₅ · powder', unit: 'mg',
+  { id: 'kmeta', name: 'Potassium metabisulfite powder', sub: 'K₂S₂O₅', unit: 'mg',
     step: 1, molarMass: 222.33, maxPerGal: 0, auto: 'kmeta', source: pubchem(28019) },
-  { id: 'campden', name: 'Campden tablets', sub: 'Check the tablet label for formulation', unit: 'tablets',
+  { id: 'campden', name: 'Campden tablets (potassium metabisulfite)', sub: 'Check the tablet label for formulation', unit: 'tablets',
     step: 1, maxPerGal: 0, auto: 'campden', source: dechlorinationStudy },
   { id: 'distilled', name: 'Distilled water', sub: 'Replaces part of the starting water', unit: 'L',
     step: 0.1, maxPerGal: GAL, auto: 'distilled', source: acidification }

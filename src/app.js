@@ -183,8 +183,9 @@ function treatmentText(dose, sourceL = sourceVolume()) {
   if (dose.status === "disabled") return "Treatment disabled.";
   if (dose.status === "none") return "No disinfectant dose required.";
   if (dose.status === "missing") return "Enter " + dose.missing.join(" and ") + " to calculate treatment.";
+  const quantity = amount => amount + " " + (dose.unit === "tablets" && amount === 1 ? "tablet" : dose.unit);
   return "For " + volLabel(sourceL) + " of source water, the recipe includes " +
-    dose.applied + " " + dose.unit + ". Required " + dose.required + " " + dose.unit + "." +
+    quantity(dose.applied) + ". Required " + quantity(dose.required) + "." +
     (dose.status === "short" ? " Insufficient stock for full treatment." : "");
 }
 
@@ -193,35 +194,35 @@ function renderAdds(){
   var anyOwned = false;
   if (S.start.chlorType !== "none") {
     const dose = dechlorination(S, sourceVolume());
-    const campden = S.dechlor.mode === "campden";
+    const { enabled, mode, campdenMg, assayPercent } = S.dechlor;
+    const campden = mode === "campden";
     html += `<div class="addrow">
-      <div class="ahead"><label class="check"><input type="checkbox" data-dechlor-enabled ${S.dechlor.enabled ? "checked" : ""}> Dechlorination</label></div>
-      <div class="mmrow"><label>Product <select data-dechlor-mode>
-        <option value="kmeta" ${campden ? "" : "selected"}>Potassium metabisulfite powder</option>
-        <option value="campden" ${campden ? "selected" : ""}>Potassium metabisulfite tablets</option>
+      <div class="mmrow"><label>Dechlorination product <select data-dechlor-mode>
+        <option value="skip" ${enabled ? "" : "selected"}>Skip treatment</option>
+        ${["kmeta", "campden"].map(id => `<option value="${id}" ${enabled && mode === id ? "selected" : ""}>${esc(ingById(id).name)}</option>`).join("")}
       </select></label>
-      <label>${campden ? "Active mg per tablet" : "Powder assay (%)"}
+      ${enabled ? `<label>${campden ? "Active mg per tablet" : "Powder assay (%)"}
         <input type="number" min="0.01" ${campden ? "" : 'max="100"'} step="any"
-          value="${(campden ? S.dechlor.campdenMg : S.dechlor.assayPercent) ?? ""}" data-dechlor-formulation>
-      </label></div>
+          value="${(campden ? campdenMg : assayPercent) ?? ""}" data-dechlor-formulation>
+      </label>` : ""}</div>
       <p data-treatment class="anote">${esc(treatmentText(dose))}</p>
     </div>`;
   }
   for (const g of INGREDIENTS) {
     const dilution = g.id === "distilled";
     if (g.inventoryOnly) {
-      if (S.enabled[g.id] && S.adds[g.id] > 0) {
+      if (S.adds[g.id] > 0) {
         html += `<div class="addrow">
-          <label class="check"><input type="checkbox" data-enable="${g.id}" checked> ${g.name}</label>
+          <strong>${g.name}</strong>
           <p class="small">Legacy planned amount · ${amountLabel(g, S.adds[g.id])}. The model leaves its contribution unevaluated.</p>
+          <button type="button" class="btn" data-clear-dose="${g.id}">Clear ${g.name.toLowerCase()} dose</button>
         </div>`;
       }
       continue;
     }
     if (g.auto && !dilution || dilution && !usesDilution(S)) continue;
-    const enabled = S.enabled[g.id];
     const planned = dilution ? Math.min(S.batchL, S.adds[g.id]) : S.adds[g.id];
-    if (!S.drawer[g.id].owned && !(enabled && planned > 0)) continue;
+    if (!S.drawer[g.id].owned && planned <= 0) continue;
     anyOwned = true;
 
     const max = sliderMax(g);
@@ -232,22 +233,21 @@ function renderAdds(){
     const unit = dilution ? S.unit : g.unit;
     const displayed = dilution ? fmt(toVolumeDisplay(planned, S.unit), 6) : planned;
     const entryStep = dilution ? toVolumeDisplay(grid.step, S.unit) : "any";
-    html += `<div class="addrow${enabled ? "" : " disabled"}" data-addrow="${g.id}">
+    html += `<div class="addrow" data-addrow="${g.id}">
       <div class="ahead">
-        <label class="check"><input type="checkbox" data-enable="${g.id}" ${enabled ? "checked" : ""} aria-label="Enable ${g.name}">
-          <span class="aname">${g.name}</span></label>
+        <span class="aname">${g.name}</span>
         <span class="anote">${g.sub}</span>
         <label class="aamt"><input type="number" min="0" step="${entryStep}" value="${displayed}"
-          data-amt="${g.id}" ${enabled ? "" : "disabled"} aria-label="${g.name} amount">
+          data-amt="${g.id}" aria-label="${g.name} amount">
           <span class="u">${unit}</span></label>
       </div>
       <input type="range" min="0" max="${grid.last}" step="1" value="${doseIndex(grid, planned)}"
-        data-slider="${g.id}" ${enabled && grid.last ? "" : "disabled"} aria-label="${g.name} slider"
+        data-slider="${g.id}" ${grid.last ? "" : "disabled"} aria-label="${g.name} slider"
         aria-valuetext="${esc(doseLabel)}" style="background:${sliderBG(max > 0 ? Math.min(1, planned / max) : 0, stockFraction)}">
       ${dilution && S.unit === "gal" ? `<p class="small dilution-readout" data-dilution-readout ${doseLabel.includes("fl oz") ? "" : "hidden"}>${esc(doseLabel)}</p>` : ""}
       <div class="ends"><span>${cap === Infinity ? "Unlimited stock" : "On hand · " + esc(amountLabel(g, cap))}</span>
         <span>Batch maximum · ${amountLabel(g, max)}</span></div>
-      <p class="warn" data-stock-warning ${enabled && planned - cap > 1e-9 ? "" : "hidden"}>This amount exceeds your stock.</p>
+      <p class="warn" data-stock-warning ${planned - cap > 1e-9 ? "" : "hidden"}>This amount exceeds your stock.</p>
     </div>`;
   }
   if (!anyOwned && S.start.chlorType === "none") {
@@ -517,13 +517,18 @@ function bind(){
   $("openDrawerBtn").addEventListener("click", openDrawer);
   $("closeDrawerBtn").addEventListener("click", closeDrawer);
   $("doneDrawerBtn").addEventListener("click", closeDrawer);
-  $("deselectAll").addEventListener("click", () => {
-    for (const item of Object.values(S.drawer)) {
-      item.owned = false;
-      item.unlimited = false;
-    }
+  function editDrawerItems(edit) {
+    Object.values(S.drawer).forEach(edit);
     recordChange(); renderDrawer(); refreshComputed();
-  });
+  }
+  $("selectAll").addEventListener("click", () => editDrawerItems(item => { item.owned = true; }));
+  $("deselectAll").addEventListener("click", () => editDrawerItems(item => {
+    item.owned = false;
+    item.unlimited = false;
+  }));
+  $("unlimitedSelected").addEventListener("click", () => editDrawerItems(item => {
+    if (item.owned) item.unlimited = true;
+  }));
   $("backdrop").addEventListener("click", closeDrawer);
 
   $("batchInput").addEventListener("change", function(){
@@ -668,6 +673,13 @@ function bind(){
   /* additions */
   let preview;
   const list = $("addsList");
+  list.addEventListener("click", event => {
+    const id = event.target.dataset.clearDose;
+    if (!id) return;
+    S.adds[id] = 0;
+    recordChange(); refreshComputed();
+    $("openDrawerBtn").focus({ preventScroll: true });
+  });
   function rawDose(input, g) {
     if (input.dataset.slider) return doseAt(doseGrid(S, g, Infinity), input.valueAsNumber);
     const value = Math.max(0, Number(input.value));
@@ -738,19 +750,16 @@ function bind(){
         list.querySelector("[" + selector + '="' + id + '"]')?.focus({ preventScroll: true });
       }
     }
-    if (input.dataset.enable) {
-      S.enabled[input.dataset.enable] = input.checked; recordChange(); refreshComputed();
-    }
-    if (input.hasAttribute("data-dechlor-enabled")) {
-      S.dechlor.enabled = input.checked; recordChange(); refreshComputed();
-    }
     if (input.hasAttribute("data-dechlor-formulation")) {
       if (input.value !== "" && !input.validity.valid) { renderAdds(); toast("Enter a valid formulation."); return; }
       S.dechlor[S.dechlor.mode === "campden" ? "campdenMg" : "assayPercent"] = input.value === "" ? null : Number(input.value);
       recordChange(); refreshComputed();
     }
     if (input.hasAttribute("data-dechlor-mode")) {
-      S.dechlor.mode = input.value; recordChange(); refreshComputed();
+      S.dechlor.enabled = input.value !== "skip";
+      if (S.dechlor.enabled) S.dechlor.mode = input.value;
+      recordChange(); refreshComputed();
+      list.querySelector("[data-dechlor-mode]").focus({ preventScroll: true });
     }
   });
 

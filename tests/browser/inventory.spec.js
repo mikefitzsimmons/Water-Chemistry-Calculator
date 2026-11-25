@@ -27,9 +27,10 @@ test('lowering stock preserves the recipe, while edits and Calculate obey measur
   await setStock('8');
   await expect(page.locator('#finalNotes')).not.toContainText('Shopping list');
   await setStock('4');
-  await page.locator('[data-enable="gypsum"]').uncheck();
+  await setDose('0');
   await expect(page.locator('#finalNotes')).not.toContainText('Shopping list');
-  await page.locator('[data-enable="gypsum"]').check();
+  await page.locator('#undoBtn').click();
+  await expect(gypsum).toHaveValue('6');
   await page.locator('#solveBtn').click();
   await expect(page.locator('#solveStatus')).toHaveText('Additions calculated.');
   expect(Number(await gypsum.inputValue())).toBeLessThanOrEqual(4);
@@ -56,4 +57,43 @@ test('distilled stock changes hatching without moving the slider maximum', async
   await page.locator('#doneDrawerBtn').click();
   await expect(page.locator('#drawerCount')).toHaveText('0');
   await expect(page.locator('[data-amt="gypsum"]')).toHaveValue('6');
+});
+
+test('bulk selection preserves stock and planned amounts and restores each change in one undo', async ({ page, context, baseURL }) => {
+  await seedLegacy(context, baseURL);
+  await page.goto('/');
+  const drawer = page.locator('#openDrawerBtn');
+  const done = page.locator('#doneDrawerBtn');
+  const gypsum = page.locator('[data-amt="gypsum"]');
+  const amount = page.locator('[data-d-stock="gypsum"]');
+  const magnesium = page.locator('[data-d-owned="mgcl2"]');
+  const magnesiumUnlimited = page.locator('[data-d-unlim="mgcl2"]');
+  await expect(page.locator('#addsList input[type="checkbox"]')).toHaveCount(0);
+  await drawer.click();
+  await expect(magnesium).not.toBeChecked();
+  await page.locator('#unlimitedSelected').click();
+  await expect(amount).toBeDisabled();
+  await page.locator('#selectAll').click();
+  await expect(magnesium).toBeChecked();
+  await expect(magnesiumUnlimited).not.toBeChecked();
+  await done.click();
+  await expect(gypsum).toHaveValue('6');
+
+  await page.locator('#undoBtn').click();
+  await drawer.click();
+  await expect(magnesium).not.toBeChecked();
+  await expect(amount).toBeDisabled();
+  await done.click();
+  await page.locator('#undoBtn').click();
+  await drawer.click();
+  await expect(amount).toBeEnabled();
+  await expect(amount).toHaveValue('8');
+  await done.click();
+  await page.locator('#redoBtn').click();
+  await page.locator('#redoBtn').click();
+  await drawer.click();
+  await expect(magnesium).toBeChecked();
+  await expect(amount).toBeDisabled();
+  await done.click();
+  await expect(gypsum).toHaveValue('6');
 });

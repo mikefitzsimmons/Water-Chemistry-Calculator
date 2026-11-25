@@ -179,7 +179,11 @@
         </div>
         <button type="button" class="xbtn" id="closeDrawerBtn" aria-label="Close drawer">✕</button>
       </header>
-      <button type="button" class="btn" id="deselectAll">Deselect all</button>
+      <div class="drawer-actions" role="group" aria-label="Bulk inventory actions">
+        <button type="button" class="btn" id="selectAll">Select all</button>
+        <button type="button" class="btn" id="deselectAll">Deselect all</button>
+        <button type="button" class="btn" id="unlimitedSelected">Set selected to unlimited</button>
+      </div>
       <div class="body" id="drawerBody"></div>
       <footer>
         <button type="button" class="btn primary big" id="doneDrawerBtn">Done</button>

@@ -4,7 +4,7 @@ import { alkAsCaCO3, gallonsToLiters } from './units.js';
 
 export const LEGACY_KEY = 'wcStaticV1';
 export const STORAGE_KEY = 'wcStaticV2';
-export const VERSION = 8;
+export const VERSION = 9;
 
 export const newId = () => crypto.randomUUID();
 
@@ -50,8 +50,8 @@ function validate(state, defaults, bounded = true) {
     validRecords(state.customPresets, entry => validTarget(entry.target, bounded) && text(entry.blurb)) &&
     (targetIds.has(state.targetPreset) ||
       state.customPresets.some(entry => 'custom:' + entry.id === state.targetPreset)) &&
-    object(state.adds) && object(state.enabled) && object(state.drawer) &&
-    keys.every(key => quantity(state.adds[key]) && typeof state.enabled[key] === 'boolean' &&
+    object(state.adds) && !Object.hasOwn(state, 'enabled') && object(state.drawer) &&
+    keys.every(key => quantity(state.adds[key]) &&
       object(state.drawer[key]) && quantity(state.drawer[key].stock) &&
       typeof state.drawer[key].owned === 'boolean' && typeof state.drawer[key].unlimited === 'boolean') &&
     object(state.dechlor) && ['kmeta', 'campden'].includes(state.dechlor.mode) &&
@@ -74,6 +74,21 @@ function upgradeTargetLimits(state, defaults) {
     }
   }
   return state;
+}
+
+function convertBatchEnablement(state, defaults) {
+  const { enabled, ...data } = state;
+  if (!object(enabled) || !object(data.adds) || !Object.keys(defaults.adds).every(id =>
+    typeof enabled[id] === 'boolean' && quantity(data.adds[id]))) {
+    throw new Error('The backup contains invalid calculator data.');
+  }
+  for (const id of Object.keys(defaults.adds)) {
+    if (!enabled[id]) data.adds[id] = 0;
+  }
+  if (object(data.dechlor) && enabled[data.dechlor.mode] === false && typeof data.dechlor.enabled === 'boolean') {
+    data.dechlor.enabled = false;
+  }
+  return data;
 }
 
 function legacyProfile(value) {
@@ -123,7 +138,7 @@ function convertForms(state, defaults) {
     if (!Object.hasOwn(entries, 'cacl2-anhydrous')) {
       entries['cacl2-anhydrous'] = key === 'drawer'
         ? { ...defaults.drawer['cacl2-anhydrous'], owned: false, unlimited: false }
-        : defaults[key]['cacl2-anhydrous'];
+        : key === 'enabled' ? true : defaults.adds['cacl2-anhydrous'];
     }
   }
   return state;
@@ -154,7 +169,7 @@ export function migrateLegacy(record, defaults) {
     ...structuredClone(defaults),
     ...record,
     adds: { ...defaults.adds, ...record.adds },
-    enabled: { ...defaults.enabled, ...record.enabled },
+    enabled: { ...Object.fromEntries(Object.keys(defaults.adds).map(id => [id, true])), ...record.enabled },
     drawer: { ...legacyDrawer(defaults), ...structuredClone(record.drawer ?? {}) },
     dechlor: { ...defaults.dechlor, ...record.dechlor },
     start: record.start ? { ...legacyProfile(record.start), assumed: record.startName === 'Distilled' } : structuredClone(defaults.start),
@@ -172,7 +187,8 @@ export function migrateLegacy(record, defaults) {
     state.targetPreset = '__customised';
   }
   if (record.drawer?.kmeta) state.drawer.kmeta.stock *= 1000;
-  return upgradeTargetLimits(convertSourceSelection(convertForms(state, defaults)), defaults);
+  const converted = convertSourceSelection(convertForms(state, defaults));
+  return upgradeTargetLimits(convertBatchEnablement(converted, defaults), defaults);
 }
 
 export function encodeBackup(state) {
@@ -181,9 +197,10 @@ export function encodeBackup(state) {
 
 export function decodeBackup(raw, defaults) {
   const record = JSON.parse(raw);
-  if (!object(record) || ![2, 3, 4, 5, 6, 7, VERSION].includes(record.version)) throw new Error('This backup version is unsupported.');
+  if (!object(record) || ![2, 3, 4, 5, 6, 7, 8, VERSION].includes(record.version)) throw new Error('This backup version is unsupported.');
   if (record.version === VERSION) return validate(record.data, defaults);
-  if (record.version === 7) return upgradeTargetLimits(record.data, defaults);
+  if (record.version === 8) return validate(convertBatchEnablement(record.data, defaults), defaults);
+  if (record.version === 7) return upgradeTargetLimits(convertBatchEnablement(record.data, defaults), defaults);
   const state = record.version === 2 ? convertVolumes(record.data) : record.data;
   const converted = record.version >= 5 ? state : {
     ...state,
@@ -197,7 +214,8 @@ export function decodeBackup(raw, defaults) {
     for (const saved of converted.savedStarts) saved.profile.chlorBasis = 'Cl2';
   }
   converted.dechlor = { ...defaults.dechlor, ...converted.dechlor };
-  return upgradeTargetLimits(convertSourceSelection(convertForms(converted, defaults)), defaults);
+  const withSelections = convertSourceSelection(convertForms(converted, defaults));
+  return upgradeTargetLimits(convertBatchEnablement(withSelections, defaults), defaults);
 }
 
 export function writeSave(getStorage, state) {
