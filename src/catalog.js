@@ -38,7 +38,7 @@ export const INGREDIENTS = [
   solid('khco3', 'Potassium bicarbonate', 'KHCO₃', 100.12, 2, pubchem(516893), {},
     { base: 1, carbon: 1 }),
   acid('citric', 'Citric acid', 'C₆H₈O₇ · anhydrous', 192.13, [3.14, 4.77, 6.39], acidification),
-  acid('lactic', 'Lactic acid 88%', 'C₃H₆O₃ · 88% w/w', 90.08, [3.86], acidification,
+  acid('lactic', 'Lactic acid 88%', 'C₃H₆O₃ · 88% w/w', 90.08, [3.86], pubchem(612),
     { strength: 0.88, density: 1.214 }),
   acid('phosphoric', 'Phosphoric acid 85%', 'H₃PO₄ · 85% w/w', 97.99, [2.12, 7.20, 12.44],
     'https://docs.alliancechemical.com/tds/phosphoric-acid-85-usp-food-grade', { strength: 0.85, density: 1.685 }),

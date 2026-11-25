@@ -19,6 +19,7 @@ test('fresh, legacy and current saves preserve zeros, active edits and the origi
   const { state, status } = readSave(getStorage, defaults);
   assert.equal(status, 'migrated');
   assert.equal(state.start.Na, 0);
+  assert.equal(state.start.Alk, 100);
   assert.equal(state.drawer['cacl2-dihydrate'].stock, 0);
   assert.equal(state.drawer['cacl2-anhydrous'].owned, false);
   assert.equal(state.adds['cacl2-dihydrate'], 1.5);

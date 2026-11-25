@@ -1,5 +1,5 @@
 import { INGREDIENTS } from './catalog.js';
-import { gallonsToLiters } from './units.js';
+import { alkAsCaCO3, gallonsToLiters } from './units.js';
 
 export const IONS = [
   {id:"Ca",  name:"Calcium",      sym:"Ca²⁺",  ceil:300},
@@ -7,13 +7,13 @@ export const IONS = [
   {id:"Na",  name:"Sodium",       sym:"Na⁺",   ceil:250},
   {id:"SO4", name:"Sulfate",      sym:"SO₄²⁻", ceil:800},
   {id:"Cl",  name:"Chloride",     sym:"Cl⁻",   ceil:350},
-  {id:"HCO3",name:"Bicarbonate",  sym:"HCO₃⁻", ceil:400}
+  {id:"Alk", name:"Alkalinity", sym:"as CaCO₃", ceil:330}
 ];
 export function ionById(id){ for (var i=0;i<IONS.length;i++) if (IONS[i].id===id) return IONS[i]; return null; }
 
 function T(ca,mg,na,so4,cl,hco3){
   function r(a){ return {min:a[0], max:a[1], ideal:a[2]}; }
-  return {Ca:r(ca), Mg:r(mg), Na:r(na), SO4:r(so4), Cl:r(cl), HCO3:r(hco3)};
+  return {Ca:r(ca), Mg:r(mg), Na:r(na), SO4:r(so4), Cl:r(cl), Alk:r(hco3.map(alkAsCaCO3)), pH:null};
 }
 export const PRESETS = [
   {id:"pilsner", name:"Pilsner", kind:"Style",
@@ -58,7 +58,7 @@ export function defaultState(){
   var s = {
     unit:"gal", batchL:gallonsToLiters(5), scaleStep:0.1,
     startName:"Distilled",
-    start:{Ca:0,Mg:0,Na:0,SO4:0,Cl:0,HCO3:0,pH:7,chlorine:0,chlorType:"none"},
+    start:{Ca:0,Mg:0,Na:0,SO4:0,Cl:0,Alk:0,pH:7,assumed:true,chlorine:0,chlorType:"none"},
     targetPreset:"pale-ale",
     target: JSON.parse(JSON.stringify(p.target)),
     adds:{}, enabled:{},

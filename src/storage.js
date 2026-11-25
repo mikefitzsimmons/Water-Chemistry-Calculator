@@ -1,8 +1,8 @@
-import { gallonsToLiters } from './units.js';
+import { alkAsCaCO3, gallonsToLiters } from './units.js';
 
 export const LEGACY_KEY = 'wcStaticV1';
 export const STORAGE_KEY = 'wcStaticV2';
-export const VERSION = 4;
+export const VERSION = 5;
 
 export const newId = () => crypto.randomUUID();
 
@@ -10,19 +10,21 @@ const object = value => value !== null && typeof value === 'object' && !Array.is
 const text = value => typeof value === 'string';
 const quantity = value => Number.isFinite(value) && value >= 0;
 const nullable = (value, valid) => value === null || valid(value);
-const profileKeys = ['Ca', 'Mg', 'Na', 'SO4', 'Cl', 'HCO3'];
+const profileKeys = ['Ca', 'Mg', 'Na', 'SO4', 'Cl', 'Alk'];
 const targetKeys = profileKeys;
 
 function validProfile(value) {
   return object(value) && profileKeys.every(key => nullable(value[key], quantity)) &&
-    nullable(value.pH, n => quantity(n) && n <= 14) && nullable(value.chlorine, quantity) &&
+    typeof value.assumed === 'boolean' && nullable(value.pH, n => quantity(n) && n <= 14) && nullable(value.chlorine, quantity) &&
     ['none', 'chlorine', 'chloramine'].includes(value.chlorType);
 }
 
 function validTarget(value) {
-  return object(value) && targetKeys.every(key => {
+  return object(value) && [...targetKeys, 'pH'].every(key => {
+    if (key === 'pH' && value[key] === null) return true;
     const r = value[key];
-    return object(r) && [r.min, r.ideal, r.max].every(quantity) && r.min <= r.ideal && r.ideal <= r.max;
+    return object(r) && [r.min, r.ideal, r.max].every(quantity) &&
+      (key !== 'pH' || r.max <= 14) && r.min <= r.ideal && r.ideal <= r.max;
   });
 }
 
@@ -54,18 +56,21 @@ function validate(state, defaults) {
 
 function legacyProfile(value) {
   return {
-    ...Object.fromEntries(profileKeys.map(key => [key, value[key] ?? null])),
+    ...Object.fromEntries(profileKeys.map(key => [key, key === 'Alk' ? alkAsCaCO3(value.HCO3 ?? null) : value[key] ?? null])),
     pH: value.pH ?? null,
+    assumed: value.assumed ?? false,
     chlorine: value.chlorine ?? null,
     chlorType: value.chlorType ?? 'none'
   };
 }
 
 function legacyTarget(value) {
-  return Object.fromEntries(targetKeys.map(key => {
-    const { min, max, ideal } = value[key];
-    return [key, { min, max, ideal: Math.max(min, Math.min(ideal, max)) }];
+  const result = Object.fromEntries(targetKeys.map(key => {
+    const { min, max, ideal } = value[key === 'Alk' ? 'HCO3' : key];
+    const convert = key === 'Alk' ? alkAsCaCO3 : n => n;
+    return [key, { min: convert(min), max: convert(max), ideal: convert(Math.max(min, Math.min(ideal, max))) }];
   }));
+  return { ...result, pH: null };
 }
 
 function convertVolumes(state) {
@@ -118,7 +123,7 @@ export function migrateLegacy(record, defaults) {
     enabled: { ...defaults.enabled, ...record.enabled },
     drawer: { ...legacyDrawer(defaults), ...structuredClone(record.drawer ?? {}) },
     dechlor: { ...defaults.dechlor, ...record.dechlor },
-    start: record.start ? legacyProfile(record.start) : structuredClone(defaults.start),
+    start: record.start ? { ...legacyProfile(record.start), assumed: record.startName === 'Distilled' } : structuredClone(defaults.start),
     target: record.target ? legacyTarget(record.target) : structuredClone(defaults.target),
     savedStarts: (record.savedStarts ?? []).map((entry, i) =>
       ({ ...entry, id: 'start-' + i, profile: legacyProfile(entry.profile) })),
@@ -139,10 +144,17 @@ export function encodeBackup(state) {
 
 export function decodeBackup(raw, defaults) {
   const record = JSON.parse(raw);
-  if (!object(record) || ![2, 3, VERSION].includes(record.version)) throw new Error('This backup version is unsupported.');
+  if (!object(record) || ![2, 3, 4, VERSION].includes(record.version)) throw new Error('This backup version is unsupported.');
   if (record.version === VERSION) return validate(record.data, defaults);
   const state = record.version === 2 ? convertVolumes(record.data) : record.data;
-  return validate(convertForms(state, defaults), defaults);
+  const converted = {
+    ...state,
+    start: { ...legacyProfile(state.start), assumed: state.startName === 'Distilled' },
+    target: legacyTarget(state.target),
+    savedStarts: state.savedStarts.map(entry => ({ ...entry, profile: legacyProfile(entry.profile) })),
+    customPresets: state.customPresets.map(entry => ({ ...entry, target: legacyTarget(entry.target) }))
+  };
+  return validate(convertForms(converted, defaults), defaults);
 }
 
 export function writeSave(getStorage, state) {

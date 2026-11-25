@@ -1,8 +1,8 @@
 import { decodeBackup, encodeBackup, newId, readSave, writeSave } from './storage.js';
 /* ================= data ================= */
-import { gallonsToLiters, litersToGallons, fromVolumeDisplay, toVolumeDisplay, alkAsCaCO3 } from './units.js';
+import { gallonsToLiters, litersToGallons, fromVolumeDisplay, toVolumeDisplay } from './units.js';
 import { INGREDIENTS, ingredientById as ingById } from './catalog.js';
-import { evaluate, effectiveDose, mixVolumes } from './evaluate.js';
+import { evaluate, mixVolumes } from './evaluate.js';
 import { stockCap as availableStock, doseMaximum, doseGrid, snapDose, shortfalls } from './inventory.js';
 import { IONS, ionById, PRESETS, presetById, defaultState } from './data.js';
 
@@ -55,8 +55,8 @@ function toast(msg){
   clearTimeout(toastTimer); toastTimer = setTimeout(function(){ t.classList.remove("show"); }, 2400);
 }
 function residualAlk(profile){
-  return [profile.HCO3, profile.Ca, profile.Mg].every(Number.isFinite)
-    ? alkAsCaCO3(profile.HCO3) - (profile.Ca/1.4 + profile.Mg/1.7) : null;
+  return [profile.Alk, profile.Ca, profile.Mg].every(Number.isFinite)
+    ? profile.Alk - (profile.Ca/1.4 + profile.Mg/1.7) : null;
 }
 function sourceVolume(){ return mixVolumes(S).sourceL; }
 
@@ -67,35 +67,6 @@ function sliderMax(g){ return doseMaximum(S, g); }
 /* ================= chemistry ================= */
 function computeFinal(){
   return evaluate(S, INGREDIENTS, IONS.map(ion => ion.id)).profile;
-}
-function estimatePH(fin){
-  /* Carbonate-equilibrium estimate for the water itself (not mash pH):
-     infer dissolved CO2 from the starting water, acids convert HCO3- to CO2. */
-  var startHCO3mmol = S.start.HCO3/61;
-  var startPH = S.start.pH || 7;
-  var co2;
-  if (startHCO3mmol > 0.02){
-    co2 = startHCO3mmol / Math.pow(10, startPH - 6.35);
-  } else {
-    co2 = 0.015;
-  }
-  /* acid/base equivalents added, meq/L */
-  let acidMeqPerL = 0;
-  const equivalents = {lactic:3.09, phosphoric:3.35, citric:2.30, nahco3:-3.13, khco3:-2.64, chalk:-2.64, lime:-7.13};
-  for (const [id, value] of Object.entries(equivalents)) {
-    acidMeqPerL += effectiveDose(S, id) * value / S.batchL;
-  }
-  var finHCO3mmol = fin.HCO3/61;
-  var converted = Math.max(0, acidMeqPerL); /* mmol/L of HCO3 turned into CO2 by acid */
-  var co2f = Math.max(0.004, co2 + converted*0.5 - Math.max(0,-acidMeqPerL)*0.3);
-  var baseHCO3 = finHCO3mmol;
-  if (startHCO3mmol <= 0.02 && baseHCO3 <= 0.02){
-    var ph0 = startPH - acidMeqPerL*0.35;
-    return Math.min(9.5, Math.max(4.0, ph0));
-  }
-  if (baseHCO3 <= 0.005) return 4.3;
-  var ph = 6.35 + Math.log(baseHCO3/co2f)/Math.LN10;
-  return Math.min(9.5, Math.max(4.0, ph));
 }
 function dechlorDose(){
   var cl = S.start.chlorine||0;
@@ -131,7 +102,7 @@ function renderStart(){
 }
 function updateStartTiles(){
   $("startAmt").innerHTML = volLabel(sourceVolume()) + ' <small>of '+volLabel(S.batchL)+'</small>';
-  $("startAlk").innerHTML = fmt(alkAsCaCO3(S.start.HCO3)) + ' <small>ppm</small>';
+  $("startAlk").innerHTML = fmt(S.start.Alk) + ' <small>ppm</small>';
   $("startRA").innerHTML = fmt(residualAlk(S.start)) + ' <small>ppm as CaCO₃</small>';
 }
 
@@ -178,11 +149,11 @@ function renderTarget(fin){
         '<input type="range" min="0" max="'+ceil+'" step="1" value="'+t.min+'" data-tmin="'+ion.id+'" aria-label="'+ion.name+' target minimum">'+
         '<input type="range" min="0" max="'+ceil+'" step="1" value="'+t.max+'" data-tmax="'+ion.id+'" aria-label="'+ion.name+' target maximum">'+
       '</div>'+
-      '<div class="mmrow"><label>Min <input type="number" min="0" max="'+ceil+'" step="1" value="'+fmt(t.min)+'" data-tminn="'+ion.id+'"></label>'+
-      '<label>Max <input type="number" min="0" max="'+ceil+'" step="1" value="'+fmt(t.max)+'" data-tmaxn="'+ion.id+'"></label></div>'+
+      '<div class="mmrow"><label>Min <input type="number" min="0" max="'+ceil+'" step="1" value="'+fmt(t.min, 2)+'" data-tminn="'+ion.id+'"></label>'+
+      '<label>Max <input type="number" min="0" max="'+ceil+'" step="1" value="'+fmt(t.max, 2)+'" data-tmaxn="'+ion.id+'"></label></div>'+
       '<div class="idealrow"><label for="ideal-'+ion.id+'">Ideal</label>'+
       '<input type="range" min="0" max="'+ceil+'" step="1" value="'+t.ideal+'" data-tideal="'+ion.id+'" id="ideal-'+ion.id+'">'+
-      '<input type="number" min="0" max="'+ceil+'" step="1" value="'+fmt(t.ideal)+'" data-tidealn="'+ion.id+'"></div>'+
+      '<input type="number" min="0" max="'+ceil+'" step="1" value="'+fmt(t.ideal, 2)+'" data-tidealn="'+ion.id+'"></div>'+
     '</div>';
   });
   $("targetRows").innerHTML = html;
@@ -293,10 +264,13 @@ function renderFinal(fin, notes){
     html += '<div class="frow"><span class="fn">'+ion.name+'</span>'+
       '<div class="mini"><div class="shade" style="left:'+pct(t.min)+'%;width:'+(pct(t.max)-pct(t.min))+'%"></div>'+
       '<div class="idealmark" style="left:'+pct(t.ideal)+'%"></div><div class="valmark" style="left:'+pct(v)+'%"></div></div>'+
-      '<span class="fv">'+fmt(v)+' <small class="'+(inR?"inrange":"outrange")+'">target '+fmt(t.min)+'–'+fmt(t.max)+'</small></span></div>';
+      '<span class="fv">'+fmt(v)+' <small class="'+(inR?"inrange":"outrange")+'">target '+fmt(t.min, 2)+'–'+fmt(t.max, 2)+'</small></span></div>';
   });
   $("finalRows").innerHTML = html;
-  $("finalPH").innerHTML = fmt(estimatePH(fin),1) + ' <small>est.</small>';
+  const chemistry = evaluate(S).chemistry;
+  $("finalPH").textContent = chemistry.pH === null
+    ? "Unavailable · enter " + chemistry.missing.join(" and ")
+    : fmt(chemistry.pH, 2) + (chemistry.assumed ? " · assumed source data" : "");
   $("finalRA").innerHTML = fmt(residualAlk(fin)) + ' <small>ppm as CaCO₃</small>';
   $("finalRatio").textContent = fin.Cl > 0 ? fmt(fin.SO4/fin.Cl,2)+" : 1" : "—";
   var dose = dechlorDose();
@@ -532,8 +506,8 @@ function bind(){
   /* starting water */
   $("startIons").addEventListener("input", function(e){
     var ion = e.target.getAttribute("data-ion");
-    if (ion){ pushUndo(true); S.start[ion] = e.target.value === "" ? null : Math.max(0, Number(e.target.value)); S.startName = "Custom"; $("startNameTag").textContent = "Custom"; saveLS(); updateStartTiles(); renderTarget(); renderFinal(); return; }
-    if (e.target.id === "start-pH"){ pushUndo(true); S.start.pH = e.target.value === "" ? null : Math.min(10, Math.max(3, Number(e.target.value))); saveLS(); renderFinal(); }
+    if (ion){ pushUndo(true); S.start.assumed = false; S.start[ion] = e.target.value === "" ? null : Math.max(0, Number(e.target.value)); S.startName = "Custom"; $("startNameTag").textContent = "Custom"; saveLS(); updateStartTiles(); renderTarget(); renderFinal(); return; }
+    if (e.target.id === "start-pH"){ pushUndo(true); S.start.assumed = false; S.start.pH = e.target.value === "" ? null : Math.min(10, Math.max(3, Number(e.target.value))); saveLS(); renderFinal(); }
   });
   $("chlorPpm").addEventListener("change", function(){ pushUndo(false); S.start.chlorine = Math.max(0, parseFloat(this.value)||0); saveLS(); renderAdds(); renderFinal(); });
   $("chlorType").addEventListener("change", function(){ pushUndo(false); S.start.chlorType = this.value; saveLS(); renderAdds(); renderFinal(); });
@@ -554,7 +528,7 @@ function bind(){
     var del = e.target.getAttribute("data-del-start");
     if (apply !== null && apply !== undefined){
       pushUndo(false);
-      if (apply === "-1"){ S.start = {Ca:0,Mg:0,Na:0,SO4:0,Cl:0,HCO3:0,pH:7,chlorine:0,chlorType:"none"}; S.startName = "Distilled"; }
+      if (apply === "-1"){ S.start = {Ca:0,Mg:0,Na:0,SO4:0,Cl:0,Alk:0,pH:7,assumed:true,chlorine:0,chlorType:"none"}; S.startName = "Distilled"; }
       else { var p = S.savedStarts.find(p => p.id === apply); if (!p) return; S.start = JSON.parse(JSON.stringify(p.profile)); S.startName = p.name; }
       saveLS(); renderAll();
     }

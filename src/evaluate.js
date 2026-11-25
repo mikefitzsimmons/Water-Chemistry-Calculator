@@ -1,4 +1,7 @@
-import { mmolPerUnit } from './catalog.js';
+import { INGREDIENTS } from './catalog.js';
+import { carbonateBalance } from './carbonate.js';
+
+export const PROFILE_KEYS = ['Ca', 'Mg', 'Na', 'SO4', 'Cl', 'Alk'];
 
 export function effectiveDose(state, id) {
   return state.enabled[id] ? state.adds[id] ?? 0 : 0;
@@ -13,24 +16,23 @@ export function dissolvedContribution(amount, perUnitMg, batchL) {
   return amount * perUnitMg / batchL;
 }
 
-export function evaluate(state, ingredients, keys) {
+export function evaluate(state, ingredients = INGREDIENTS, keys = PROFILE_KEYS, includePH = true) {
   const volumes = mixVolumes(state);
   const { batchL, sourceL } = volumes;
   const profile = Object.fromEntries(keys.map(key => {
     const source = state.start[key];
     return [key, sourceL === 0 ? 0 : source == null ? null : source * (sourceL / batchL)];
   }));
+  const additions = [];
   for (const ingredient of ingredients) {
     const dose = effectiveDose(state, ingredient.id);
     if (!dose || !ingredient.mass) continue;
+    additions.push([ingredient, dose]);
     for (const [key, mg] of Object.entries(ingredient.mass)) {
       if (profile[key] != null) profile[key] += dissolvedContribution(dose, mg, batchL);
     }
-    if (profile.HCO3 != null && (ingredient.base || ingredient.pKs)) {
-      const equivalents = ingredient.base ?? -1;
-      profile.HCO3 += dose * mmolPerUnit(ingredient) * equivalents * 61 / batchL;
-    }
   }
-  if (profile.HCO3 < 0) profile.HCO3 = 0;
-  return { profile, volumes };
+  const chemistry = carbonateBalance(state.start, volumes, additions, 0, includePH);
+  if (keys.includes('Alk')) profile.Alk = chemistry.alkalinity;
+  return { profile, volumes, chemistry };
 }
