@@ -87,17 +87,20 @@ function sliderMax(g){ return doseMaximum(S, g); }
 function renderStart(){
   const { start } = S;
   const bicarbonate = start.alkBasis === "HCO3";
-  $("startIons").innerHTML = IONS.map(ion => {
-    const name = ion.id === "Alk" ? (bicarbonate ? "Bicarbonate" : "Alkalinity") : ion.name;
-    const value = ion.id === "Alk" && bicarbonate ? alkAsBicarbonate(start.Alk) : start[ion.id];
-    return `<div class="ionfield">
-      <label for="start-${ion.id}">${name} <span class="unit">(mg/L)</span></label>
-      <input type="number" min="0" step="any" id="start-${ion.id}" data-report="${ion.id}" value="${value === null ? "" : fmt(value, 6)}">
+  const reportIons = IONS.filter(ion => ion.id !== "Alk");
+  if (!$("start-Ca")) {
+    $("startIons").innerHTML = reportIons.map(ion => `<div class="ionfield">
+      <label for="start-${ion.id}">${ionLabel(ion)} <span class="unit">(mg/L)</span></label>
+      <input type="number" min="0" step="any" id="start-${ion.id}" data-report="${ion.id}">
+    </div>`).join("") + `<div class="ionfield">
+      <label for="start-pH">Source pH <span class="unit">(optional)</span></label>
+      <input type="number" min="0" max="14" step="any" id="start-pH" data-report="pH">
     </div>`;
-  }).join("") + `<div class="ionfield">
-    <label for="start-pH">Source pH <span class="unit">(optional)</span></label>
-    <input type="number" min="0" max="14" step="any" id="start-pH" data-report="pH" value="${start.pH ?? ""}">
-  </div>`;
+  }
+  for (const { id } of reportIons) $("start-" + id).value = start[id] === null ? "" : fmt(start[id], 6);
+  $("start-pH").value = start.pH ?? "";
+  const alkalinity = bicarbonate ? alkAsBicarbonate(start.Alk) : start.Alk;
+  $("start-Alk").value = alkalinity === null ? "" : fmt(alkalinity, 6);
   $("alkBasis").value = start.alkBasis;
   $("startNameTag").textContent = S.startName;
   const starts = [...STARTS, ...S.savedStarts.map(profile => ({ ...profile, id: "saved:" + profile.id }))];
@@ -110,7 +113,8 @@ function renderStart(){
   $("chlorPpm").value = start.chlorine ?? "";
   $("chlorType").value = start.chlorType;
   $("chlorBasis").value = start.chlorBasis ?? "";
-  $("chlorBasis").options[2].textContent = start.chlorType === "chloramine" ? "As NH₂Cl" : "As HOCl";
+  $("chlorBasis").options[2].textContent = start.chlorType === "chloramine" ? "As NH₂Cl (chloramine)"
+    : start.chlorType === "chlorine" ? "As HOCl (hypochlorous acid)" : "As reported compound";
   if (start.chlorType !== "none") $("disinfectant").open = true;
   $("startChips").innerHTML = S.savedStarts.map(p => `<span class="chip">
     <button type="button" class="apply" data-apply-start="${p.id}">${esc(p.name)}</button>
@@ -120,6 +124,10 @@ function renderStart(){
 }
 function updateStartTiles(state = S){
   $("startAmt").innerHTML = volLabel(sourceVolume(state)) + ' <small>of ' + volLabel(S.batchL) + '</small>';
+}
+
+function ionLabel({ id, name, sym }) {
+  return id === "SO4" || id === "Cl" ? name + " <span class=\"ion-symbol\">(" + sym + ")</span>" : name;
 }
 
 function currentPresetObj(){
@@ -147,14 +155,15 @@ function renderTarget(){
   $("pHTargetEnabled").checked = S.target.pH !== null;
   const ions = S.target.pH ? [...IONS, { id: "pH", name: "pH" }] : IONS;
   const headers = '<span></span><span class="lbl">Minimum</span><span class="lbl">Preferred</span><span class="lbl">Maximum</span>';
-  $("targetRows").innerHTML = headers + ions.map(({ id, name }) => {
+  $("targetRows").innerHTML = headers + ions.map(ion => {
+    const { id, name } = ion;
     const { min, max } = targetLimits(id);
     const fields = Object.entries({ min: "minimum", ideal: "preferred", max: "maximum" }).map(([key, label]) =>
       `<input type="number" step="any" min="${min}" max="${max}"
         aria-label="${name} target ${label}" data-target-key="${id}" data-target-bound="${key}"
         value="${fmt(S.target[id][key], 5)}">`
     ).join("");
-    return `<span class="target-label">${name}</span>` + fields;
+    return `<span class="target-label">${ionLabel(ion)}</span>` + fields;
   }).join("");
   $("targetAdvisories").innerHTML = targetAdvisories(S.target).map(({ text, source }) =>
     `<p>${esc(text)} <a href="${source}" target="_blank" rel="noopener">EPA reference</a></p>`
@@ -290,7 +299,7 @@ function renderFinal(state = S){
     const pct = x => Math.max(0, Math.min(100, (x - floor) / (ceil - floor) * 100));
     const check = statusByKey.get(ion.id);
     const inR = check.status === "in range";
-    html += '<div class="frow"><span class="fn">'+ion.name+'</span>'+
+    html += '<div class="frow"><span class="fn">'+ionLabel(ion)+'</span>'+
       '<div class="mini"><div class="shade" style="left:'+pct(t.min)+'%;width:'+(pct(t.max)-pct(t.min))+'%"></div>'+
       '<div class="idealmark" style="left:'+pct(t.ideal)+'%"></div>'+
       (v === null ? '' : '<div class="valmark" style="left:'+pct(v)+'%"></div>')+'</div>'+
@@ -566,6 +575,7 @@ function bind(){
     recordChange(); renderStart();
   });
   $("startIons").addEventListener("change", event => readReport(event.target, event.target.dataset.report));
+  $("start-Alk").addEventListener("change", event => readReport(event.target, "Alk"));
   $("chlorPpm").addEventListener("change", event => readReport(event.target, "chlorine"));
   $("chlorType").addEventListener("change", event => {
     S.start.chlorType = event.target.value;

@@ -40,16 +40,25 @@
           <label class="lbl" for="sourceSelect">Water source</label>
           <select id="sourceSelect"></select>
           <p id="sourceInfo" class="small"></p>
-          <div class="rowflex">
-            <div class="field">
-              <label class="lbl" for="alkBasis">Water report basis</label>
-              <select id="alkBasis">
-                <option value="CaCO3">Alkalinity as CaCO₃</option>
-                <option value="HCO3">Bicarbonate as HCO₃⁻</option>
-              </select>
-            </div>
-          </div>
+          <p class="small report-hint">For dilute water, 1 ppm ≈ 1 mg/L. Match the reporting basis and leave missing measurements blank.</p>
           <div class="iongrid" id="startIons"></div>
+          <fieldset class="alk-report" aria-describedby="alkReportHelp">
+            <legend class="lbl">Alkalinity</legend>
+            <div class="rowflex">
+              <div class="field">
+                <label class="lbl" for="start-Alk">Value (mg/L)</label>
+                <input type="number" min="0" step="any" id="start-Alk">
+              </div>
+              <div class="field">
+                <label class="lbl" for="alkBasis">Alkalinity reporting basis</label>
+                <select id="alkBasis">
+                  <option value="CaCO3">Alkalinity as CaCO₃</option>
+                  <option value="HCO3">Bicarbonate as HCO₃⁻</option>
+                </select>
+              </div>
+            </div>
+            <p class="small report-hint" id="alkReportHelp">Total hardness (as CaCO₃) measures mainly calcium and magnesium together. If your report gives only total hardness, leave calcium and alkalinity blank.</p>
+          </fieldset>
           <div class="tiles">
             <div class="tile"><div class="t">Source volume</div><div class="v" id="startAmt"></div></div>
           </div>
@@ -73,7 +82,7 @@
                 <label class="lbl" for="chlorBasis">Reporting basis</label>
                 <select id="chlorBasis">
                   <option value="">Unknown</option>
-                  <option value="Cl2">As Cl₂</option>
+                  <option value="Cl2">As Cl₂ (chlorine equivalent)</option>
                   <option value="compound">As reported compound</option>
                 </select>
               </div>
