@@ -1,5 +1,5 @@
 :root{
-  color-scheme: light dark;
+  color-scheme:light;
   --bg:#edf0ec;
   --card:#ffffff;
   --card2:#f4f6f2;
@@ -20,27 +20,26 @@
   --shadow:0 1px 3px rgba(20,30,22,.10),0 8px 24px rgba(20,30,22,.06);
   --radius:14px;
 }
-@media (prefers-color-scheme: dark){
-  :root{
-    --bg:#10140f;
-    --card:#1a201a;
-    --card2:#212822;
-    --ink:#e9efe7;
-    --ink2:#a9b8ab;
-    --line:#333d33;
-    --accent:#e09a3c;
-    --accent-ink:#1c1305;
-    --green:#5cc48c;
-    --green-soft:#173527;
-    --amber-soft:#3a2a12;
-    --bad:#ff9d94;
-    --bad-soft:#40201d;
-    --shade:rgba(92,196,140,.32);
-    --track:#2c352c;
-    --hatch1:rgba(233,239,231,.38);
-    --hatch2:rgba(233,239,231,.12);
-    --shadow:0 1px 3px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.3);
-  }
+:root[data-appearance="dark"]{
+  color-scheme:dark;
+  --bg:#10140f;
+  --card:#1a201a;
+  --card2:#212822;
+  --ink:#e9efe7;
+  --ink2:#a9b8ab;
+  --line:#333d33;
+  --accent:#e09a3c;
+  --accent-ink:#1c1305;
+  --green:#5cc48c;
+  --green-soft:#173527;
+  --amber-soft:#3a2a12;
+  --bad:#ff9d94;
+  --bad-soft:#40201d;
+  --shade:rgba(92,196,140,.32);
+  --track:#2c352c;
+  --hatch1:rgba(233,239,231,.38);
+  --hatch2:rgba(233,239,231,.12);
+  --shadow:0 1px 3px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.3);
 }
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
@@ -222,6 +221,11 @@ a{color:var(--green)}
 .site-header h1{font-size:clamp(1.65rem,4vw,2.35rem);max-width:28ch}
 .site-header .lede{margin:6px 0 0}
 .site-tools{display:flex;flex-wrap:wrap;gap:8px}
+.display-settings{margin-top:8px;font-size:.875rem}
+.display-settings .rowflex{margin-top:4px;padding:8px 12px;background:var(--card);border-radius:8px;border:1px solid var(--line)}
+.reference-link{display:inline-flex;align-items:center;gap:4px;vertical-align:middle}
+.reference-link svg{flex:none}
+.drawer .reference-link{justify-content:center;width:32px;height:32px}
 #saveStatus{display:block;margin:8px 0 0}
 #sec-adds header .btn{white-space:normal}
 .drawer-actions{display:flex;flex-wrap:wrap;gap:6px;margin:12px 16px 4px}

@@ -24,6 +24,20 @@
             <input type="file" id="backupInput" accept=".json,application/json" hidden>
           </div>
           <span class="small" id="saveStatus" role="status"></span>
+          <details id="displaySettings" class="display-settings">
+            <summary>Settings</summary>
+            <div class="rowflex">
+              <div class="field">
+                <label class="lbl" for="appearance">Appearance</label>
+                <select id="appearance">
+                  <option value="system">System</option>
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                </select>
+              </div>
+              <label class="check"><input type="checkbox" id="ingredientReferences"> Show ingredient references</label>
+            </div>
+          </details>
         </div>
       </div>
       <nav class="section-jumps" aria-label="Calculator sections">

@@ -4,7 +4,7 @@ import { alkAsCaCO3, gallonsToLiters } from './units.js';
 
 export const LEGACY_KEY = 'wcStaticV1';
 export const STORAGE_KEY = 'wcStaticV2';
-export const VERSION = 9;
+export const VERSION = 10;
 
 export const newId = () => crypto.randomUUID();
 
@@ -42,6 +42,8 @@ function validRecords(records, valid) {
 function validate(state, defaults, bounded = true) {
   const keys = Object.keys(defaults.drawer);
   if (!(object(state) && ['gal', 'L'].includes(state.unit) && quantity(state.batchL) && state.batchL > 0 &&
+    object(state.display) && ['system', 'light', 'dark'].includes(state.display.appearance) &&
+    typeof state.display.ingredientReferences === 'boolean' &&
     [0.01, 0.05, 0.1, 0.5, 1].includes(state.scaleStep) && text(state.startName) &&
     text(state.startId) && validProfile(state.start) &&
     (sourceIds.has(state.startId) ||
@@ -168,6 +170,7 @@ export function migrateLegacy(record, defaults) {
   const state = {
     ...structuredClone(defaults),
     ...record,
+    display: structuredClone(defaults.display),
     adds: { ...defaults.adds, ...record.adds },
     enabled: { ...Object.fromEntries(Object.keys(defaults.adds).map(id => [id, true])), ...record.enabled },
     drawer: { ...legacyDrawer(defaults), ...structuredClone(record.drawer ?? {}) },
@@ -197,11 +200,13 @@ export function encodeBackup(state) {
 
 export function decodeBackup(raw, defaults) {
   const record = JSON.parse(raw);
-  if (!object(record) || ![2, 3, 4, 5, 6, 7, 8, VERSION].includes(record.version)) throw new Error('This backup version is unsupported.');
+  if (!object(record) || ![2, 3, 4, 5, 6, 7, 8, 9, VERSION].includes(record.version)) throw new Error('This backup version is unsupported.');
   if (record.version === VERSION) return validate(record.data, defaults);
-  if (record.version === 8) return validate(convertBatchEnablement(record.data, defaults), defaults);
-  if (record.version === 7) return upgradeTargetLimits(convertBatchEnablement(record.data, defaults), defaults);
-  const state = record.version === 2 ? convertVolumes(record.data) : record.data;
+  const data = { ...record.data, display: structuredClone(defaults.display) };
+  if (record.version === 9) return validate(data, defaults);
+  if (record.version === 8) return validate(convertBatchEnablement(data, defaults), defaults);
+  if (record.version === 7) return upgradeTargetLimits(convertBatchEnablement(data, defaults), defaults);
+  const state = record.version === 2 ? convertVolumes(data) : data;
   const converted = record.version >= 5 ? state : {
     ...state,
     start: { ...legacyProfile(state.start), assumed: state.startName === 'Distilled' },

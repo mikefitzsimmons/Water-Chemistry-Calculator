@@ -10,6 +10,7 @@ import { IONS, STARTS, PRESETS, presetById, defaultState } from './data.js';
 import { targetAdvisories, targetLimits, validTargetRange } from './targets.js';
 
 const getStorage = () => window.localStorage;
+const systemAppearance = window.matchMedia("(prefers-color-scheme: dark)");
 const loaded = readSave(getStorage, defaultState());
 let S = loaded.state;
 const history = createHistory(S);
@@ -31,12 +32,14 @@ function updateHistoryButtons(){
   $("redoBtn").disabled = !history.canRedo;
 }
 
-function recordChange({ persistNoop = false } = {}){
+function recordChange({ persistNoop = false, displayOnly = false } = {}){
   const changed = history.commit(S);
   if (changed) {
-    revision++;
-    lastSolve = null;
-    if (!$("solveBtn").disabled) $("solveStatus").textContent = "";
+    if (!displayOnly) {
+      revision++;
+      lastSolve = null;
+      if (!$("solveBtn").disabled) $("solveStatus").textContent = "";
+    }
     updateHistoryButtons();
   }
   if (changed || persistNoop) persistState();
@@ -65,6 +68,12 @@ function restoreHistory(direction){
 /* ================= helpers ================= */
 function $(id){ return document.getElementById(id); }
 function esc(s){ return String(s).replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
+function referenceLink(url, name, label = "") {
+  return `<a class="reference-link" href="${esc(url)}" target="_blank" rel="noopener" aria-label="${esc(name)} (opens in a new tab)">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+      <path d="M12 4H5v16h13v-8M8 12h3m-3 4h6M15 4h5v5m0-5-7 7"/>
+    </svg>${label ? `<span>${esc(label)}</span>` : ""}</a>`;
+}
 function fmt(n, dp){ if (!Number.isFinite(n)) return "—"; return Number(n.toFixed(dp===undefined?0:dp)).toString(); }
 function volLabel(liters){ return fmt(toVolumeDisplay(liters, S.unit), 3) + " " + S.unit; }
 var toastTimer = null;
@@ -108,7 +117,7 @@ function renderStart(){
   $("sourceSelect").value = S.startId;
   const source = STARTS.find(p => p.id === S.startId);
   $("sourceInfo").innerHTML = source ? esc(source.description) +
-    (source.reference ? ` <a href="${source.reference}" rel="noopener" target="_blank">Source</a>` : "") : "";
+    (source.reference ? " " + referenceLink(source.reference, source.name + " source", "Source") : "") : "";
   $("sourceInfo").hidden = !source;
   $("chlorPpm").value = start.chlorine ?? "";
   $("chlorType").value = start.chlorType;
@@ -144,7 +153,7 @@ function renderPresetSelect(){
   $("presetInfo").hidden = !p?.blurb;
   const reference = presetById(S.targetPreset)?.source;
   $("presetInfo").innerHTML = p ? esc(p.blurb) +
-    (reference ? ` <a href="${reference}" rel="noopener" target="_blank">Reference</a>` : "") : "";
+    (reference ? " " + referenceLink(reference, p.name + " reference", "Reference") : "") : "";
   $("presetChips").innerHTML = S.customPresets.map(saved => `<span class="chip">
     <button type="button" class="apply" data-apply-preset="${saved.id}">${esc(saved.name)}</button>
     <button type="button" data-del-preset="${saved.id}" aria-label="Delete ${esc(saved.name)}">✕</button>
@@ -166,7 +175,7 @@ function renderTarget(){
     return `<span class="target-label">${ionLabel(ion)}</span>` + fields;
   }).join("");
   $("targetAdvisories").innerHTML = targetAdvisories(S.target).map(({ text, source }) =>
-    `<p>${esc(text)} <a href="${source}" target="_blank" rel="noopener">EPA reference</a></p>`
+    `<p>${esc(text)} ${referenceLink(source, "EPA " + text.split(" ", 1)[0] + " reference", "EPA reference")}</p>`
   ).join("");
 }
 
@@ -367,7 +376,7 @@ function renderDrawer(){
     html += '<div class="drow"><div class="dhead">'+
       '<label class="check"><input type="checkbox" data-d-owned="'+g.id+'" '+(d.owned?"checked":"")+'><span class="dname">'+esc(g.name)+'</span></label>'+
       '<span class="anote">'+esc(g.sub)+(g.inventoryOnly ? " · inventory only" : "")+'</span>'+
-      '<a class="small" aria-label="'+esc(g.name)+' reference" href="'+g.source+'" target="_blank" rel="noopener">Reference</a></div>'+
+      (S.display.ingredientReferences ? referenceLink(g.source, g.name + " reference") : "")+'</div>'+
       (d.owned ? '<div class="dstock"><label class="lbl">On hand <input type="number" min="0" step="any" value="'+(g.id === "distilled" ? fmt(toVolumeDisplay(d.stock, S.unit), 4) : d.stock)+'" data-d-stock="'+g.id+'" '+(d.unlimited?"disabled":"")+'></label>'+
         '<span class="small">'+unitLabel+'</span>'+
         '<label class="check" style="font-weight:550"><input type="checkbox" data-d-unlim="'+g.id+'" '+(d.unlimited?"checked":"")+'> Unlimited</label></div>' : '')+
@@ -376,7 +385,16 @@ function renderDrawer(){
   $("drawerBody").innerHTML = html;
 }
 
+function applyAppearance() {
+  const { appearance } = S.display;
+  document.documentElement.dataset.appearance = appearance === "system"
+    ? (systemAppearance.matches ? "dark" : "light") : appearance;
+}
+
 function renderAll(){
+  applyAppearance();
+  $("appearance").value = S.display.appearance;
+  $("ingredientReferences").checked = S.display.ingredientReferences;
   $("batchInput").value = fmt(toVolumeDisplay(S.batchL, S.unit),6);
   $("batchUnit").textContent = S.unit;
   $("unitGal").setAttribute("aria-pressed", S.unit==="gal" ? "true":"false");
@@ -485,6 +503,17 @@ function keepDrawerFocus(input) {
 }
 
 function bind(){
+  systemAppearance.addEventListener("change", applyAppearance);
+  $("appearance").addEventListener("change", event => {
+    S.display.appearance = event.target.value;
+    recordChange({ displayOnly: true });
+    applyAppearance();
+  });
+  $("ingredientReferences").addEventListener("change", event => {
+    S.display.ingredientReferences = event.target.checked;
+    recordChange({ displayOnly: true });
+    renderDrawer();
+  });
   $("undoBtn").addEventListener("click", () => restoreHistory("undo"));
   $("redoBtn").addEventListener("click", () => restoreHistory("redo"));
   document.addEventListener("input", event => {
@@ -503,7 +532,9 @@ function bind(){
     if (e.key === "Escape") closeDrawer();
     if (e.key === "Tab") {
       const controls = [...$("drawer").querySelectorAll("button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href]")];
-      if (e.shiftKey && document.activeElement === controls[0]) {
+      if (!controls.includes(document.activeElement)) {
+        e.preventDefault(); (e.shiftKey ? controls.at(-1) : controls[0]).focus();
+      } else if (e.shiftKey && document.activeElement === controls[0]) {
         e.preventDefault(); controls.at(-1).focus();
       } else if (!e.shiftKey && document.activeElement === controls.at(-1)) {
         e.preventDefault(); controls[0].focus();

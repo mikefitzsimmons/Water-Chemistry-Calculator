@@ -69,3 +69,15 @@ test('updates older target limits while preserving active doses, the starting so
   delete state.enabled;
   assert.throws(() => decodeBackup(encodeBackup(state), defaults), /invalid/);
 });
+
+test('migrates default display settings and validates their backup round trip', () => {
+  const { defaults } = setup();
+  const state = structuredClone(defaults);
+  delete state.display;
+  const upgraded = decodeBackup(JSON.stringify({ version: 9, data: state }), defaults);
+  assert.deepEqual(upgraded.display, { appearance: 'system', ingredientReferences: false });
+  upgraded.display = { appearance: 'dark', ingredientReferences: true };
+  assert.deepEqual(decodeBackup(encodeBackup(upgraded), defaults), upgraded);
+  upgraded.display.appearance = 'sepia';
+  assert.throws(() => decodeBackup(encodeBackup(upgraded), defaults), /invalid/);
+});

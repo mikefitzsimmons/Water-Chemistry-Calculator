@@ -75,6 +75,7 @@ export const STARTS = [
 export function defaultState() {
   return {
     unit: 'gal', batchL: gallonsToLiters(5), scaleStep: 0.1,
+    display: { appearance: 'system', ingredientReferences: false },
     startId: 'distilled', startName: 'Distilled', start: structuredClone(STARTS[0].profile),
     targetPreset: 'pale-ale', target: structuredClone(presetById('pale-ale').target),
     adds: Object.fromEntries(INGREDIENTS.map(g => [g.id, 0])),
